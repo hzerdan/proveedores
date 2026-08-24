@@ -283,13 +283,15 @@ BEGIN
     tax_id,
     legal_name,
     trade_name,
-    is_active
+    is_active,
+    created_by
   ) VALUES (
     v_next_code,
     v_formatted_cuit,
     COALESCE(NULLIF(trim(p_legal_name), ''), trim(p_trade_name)),
     trim(p_trade_name),
-    true
+    true,
+    v_user_id
   ) RETURNING * INTO v_new_supplier;
 
   RETURN jsonb_build_object(
