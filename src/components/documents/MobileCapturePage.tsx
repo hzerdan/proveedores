@@ -1,9 +1,67 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Camera, CheckCircle2, RotateCcw, Upload, AlertCircle, Building2, Loader2 } from 'lucide-react';
+import { Camera, CheckCircle2, RotateCcw, Upload, AlertCircle, Building2, Loader2, Image as ImageIcon } from 'lucide-react';
 
 interface MobileCapturePageProps {
   captureToken: string;
+}
+
+/**
+ * Resizes and compresses image on the client before upload (max 2048px, JPEG 0.85)
+ * Prevents mobile browser memory crashes and ensures ultra-fast uploads
+ */
+function compressImage(file: File): Promise<{ blob: Blob; dataUrl: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      const img = new Image();
+      img.onload = () => {
+        const MAX_DIM = 2048;
+        let width = img.width;
+        let height = img.height;
+
+        if (width > height) {
+          if (width > MAX_DIM) {
+            height = Math.round((height * MAX_DIM) / width);
+            width = MAX_DIM;
+          }
+        } else {
+          if (height > MAX_DIM) {
+            width = Math.round((width * MAX_DIM) / height);
+            height = MAX_DIM;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('No se pudo inicializar el procesador de imágenes'));
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+        canvas.toBlob(
+          (blob) => {
+            if (blob) {
+              resolve({ blob, dataUrl });
+            } else {
+              reject(new Error('Error al comprimir la imagen'));
+            }
+          },
+          'image/jpeg',
+          0.85
+        );
+      };
+      img.onerror = () => reject(new Error('No se pudo decodificar la imagen'));
+      img.src = e.target?.result as string;
+    };
+    reader.onerror = () => reject(new Error('Error al leer el archivo de la cámara'));
+    reader.readAsDataURL(file);
+  });
 }
 
 export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureToken }) => {
@@ -11,12 +69,15 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
   const [loadingSession, setLoadingSession] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedBlob, setSelectedBlob] = useState<Blob | null>(null);
+  const [fileName, setFileName] = useState<string>('comprobante.jpg');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [processingImage, setProcessingImage] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
 
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+  const galleryInputRef = useRef<HTMLInputElement>(null);
 
   // Validate session token on load
   useEffect(() => {
@@ -54,42 +115,51 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
     validateToken();
   }, [captureToken]);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setSelectedFile(file);
-      const url = URL.createObjectURL(file);
-      setPreviewUrl(url);
+  const handleFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !e.target.files[0]) return;
+    const file = e.target.files[0];
+    setProcessingImage(true);
+    setError(null);
+
+    try {
+      setFileName(file.name || 'comprobante.jpg');
+      const { blob, dataUrl } = await compressImage(file);
+      setSelectedBlob(blob);
+      setPreviewUrl(dataUrl);
+    } catch (err: any) {
+      console.error('Error processing captured photo:', err);
+      setError(err.message || 'Error al procesar la foto');
+    } finally {
+      setProcessingImage(false);
     }
   };
 
   const handleUpload = async () => {
-    if (!selectedFile || !sessionInfo) return;
+    if (!selectedBlob || !sessionInfo) return;
     setUploading(true);
     setError(null);
 
     try {
-      // 1. Prepare sanitized file path
-      const sanitizedName = selectedFile.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const sanitizedName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
       const storagePath = `temp-uploads/${sessionInfo.session_id}/${Date.now()}_${sanitizedName}`;
 
-      // 2. Upload to Supabase Storage
+      // Upload compressed Blob to Storage
       const { error: uploadErr } = await supabase.storage
         .from('supplier-documents')
-        .upload(storagePath, selectedFile, {
-          contentType: selectedFile.type || 'image/jpeg',
+        .upload(storagePath, selectedBlob, {
+          contentType: 'image/jpeg',
           upsert: true,
         });
 
       if (uploadErr) throw uploadErr;
 
-      // 3. Submit upload record via RPC
+      // Submit via RPC
       const { data: submitRes, error: submitErr } = await supabase.rpc('rpc_submit_mobile_upload', {
         p_session_token: captureToken,
         p_storage_path: storagePath,
-        p_file_name: selectedFile.name,
-        p_mime_type: selectedFile.type || 'image/jpeg',
-        p_file_size: selectedFile.size,
+        p_file_name: fileName,
+        p_mime_type: 'image/jpeg',
+        p_file_size: selectedBlob.size,
       });
 
       if (submitErr) throw submitErr;
@@ -108,6 +178,23 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col items-center justify-between p-4 sm:p-6 font-sans">
+      {/* Persistent Hidden Inputs */}
+      <input
+        type="file"
+        accept="image/*"
+        capture="environment"
+        ref={cameraInputRef}
+        onChange={handleFilePicked}
+        className="hidden"
+      />
+      <input
+        type="file"
+        accept="image/*"
+        ref={galleryInputRef}
+        onChange={handleFilePicked}
+        className="hidden"
+      />
+
       {/* Brand Header */}
       <header className="w-full max-w-md pt-4 flex items-center justify-center space-x-2.5">
         <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-sky-500/20">
@@ -151,6 +238,12 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
               Puedes cerrar esta pestaña en tu celular.
             </div>
           </div>
+        ) : processingImage ? (
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-8 text-center space-y-4 shadow-2xl">
+            <Loader2 className="w-8 h-8 text-sky-400 animate-spin mx-auto" />
+            <p className="text-xs text-slate-300 font-bold">Procesando foto del comprobante...</p>
+            <p className="text-[11px] text-slate-500">Optimizando resolución para lectura fiscal...</p>
+          </div>
         ) : previewUrl ? (
           <div className="bg-slate-900 border border-slate-800 rounded-3xl p-5 space-y-4 shadow-2xl">
             <div className="relative rounded-2xl overflow-hidden bg-black border border-slate-800 max-h-96 flex items-center justify-center">
@@ -165,9 +258,10 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
               <button
                 type="button"
                 onClick={() => {
-                  setSelectedFile(null);
+                  setSelectedBlob(null);
                   setPreviewUrl(null);
-                  if (fileInputRef.current) fileInputRef.current.value = '';
+                  if (cameraInputRef.current) cameraInputRef.current.value = '';
+                  if (galleryInputRef.current) galleryInputRef.current.value = '';
                 }}
                 disabled={uploading}
                 className="flex-1 flex items-center justify-center space-x-1.5 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all disabled:opacity-50"
@@ -197,33 +291,33 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
             </div>
           </div>
         ) : (
-          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 text-center space-y-6 shadow-2xl">
-            <div className="space-y-2">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 text-center space-y-5 shadow-2xl">
+            <div className="space-y-1.5">
               <h2 className="text-base font-bold text-white">Fotografiar Comprobante</h2>
               <p className="text-xs text-slate-400 leading-relaxed">
                 Apuntá con buena luz enfocando el comprobante completo.
               </p>
             </div>
 
-            {/* Hidden native input */}
-            <input
-              type="file"
-              accept="image/*"
-              capture="environment"
-              ref={fileInputRef}
-              onChange={handleFileChange}
-              className="hidden"
-            />
-
+            {/* Direct Camera Button */}
             <button
-              onClick={() => fileInputRef.current?.click()}
-              className="w-full py-8 rounded-3xl bg-gradient-to-b from-sky-500/20 to-sky-600/10 border-2 border-dashed border-sky-500/40 hover:border-sky-400 text-sky-300 flex flex-col items-center justify-center space-y-3 active:scale-98 transition-all"
+              onClick={() => cameraInputRef.current?.click()}
+              className="w-full py-6 rounded-3xl bg-gradient-to-b from-sky-500/20 to-sky-600/10 border-2 border-dashed border-sky-500/40 hover:border-sky-400 text-sky-300 flex flex-col items-center justify-center space-y-2 active:scale-98 transition-all"
             >
-              <div className="w-16 h-16 rounded-full bg-sky-500 text-white flex items-center justify-center shadow-lg shadow-sky-500/30">
-                <Camera className="w-8 h-8" />
+              <div className="w-14 h-14 rounded-full bg-sky-500 text-white flex items-center justify-center shadow-lg shadow-sky-500/30">
+                <Camera className="w-7 h-7" />
               </div>
-              <span className="text-sm font-bold text-white">Abrir Cámara</span>
-              <span className="text-[11px] text-slate-400">o elegir foto de la galería</span>
+              <span className="text-sm font-bold text-white">Tomar Foto con Cámara</span>
+            </button>
+
+            {/* Alternative Gallery Button */}
+            <button
+              type="button"
+              onClick={() => galleryInputRef.current?.click()}
+              className="w-full py-3 rounded-2xl bg-slate-800/80 hover:bg-slate-800 border border-slate-700 text-slate-300 hover:text-white text-xs font-semibold flex items-center justify-center space-x-2 transition-colors"
+            >
+              <ImageIcon className="w-4 h-4 text-slate-400" />
+              <span>Elegir foto existente de la Galería</span>
             </button>
           </div>
         )}
