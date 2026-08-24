@@ -163,7 +163,7 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange }) => {
                       }`}
                     >
                       <FileCode2 className="w-4 h-4 text-sky-400" />
-                      <span>Tipos de Documentos</span>
+                      <span>ABM Tipos de Comprobantes</span>
                     </button>
 
                     <button

@@ -77,6 +77,7 @@ export interface DocumentType {
   can_be_source_application: boolean;
   can_be_target_application: boolean;
   requires_due_date?: boolean;
+  is_system_internal?: boolean;
   is_active: boolean;
 }
 
