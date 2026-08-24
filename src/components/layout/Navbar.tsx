@@ -138,6 +138,21 @@ export const Navbar: React.FC<NavbarProps> = ({ currentTab, onTabChange }) => {
                   >
                     <button
                       onClick={() => {
+                        onTabChange('suppliers');
+                        setShowMastersMenu(false);
+                      }}
+                      className={`w-full text-left px-3 py-2 rounded-lg text-xs flex items-center space-x-2.5 transition-colors ${
+                        currentTab === 'suppliers'
+                          ? 'bg-emerald-500/20 text-emerald-300 font-bold'
+                          : 'text-slate-300 hover:bg-slate-700/60'
+                      }`}
+                    >
+                      <Building2 className="w-4 h-4 text-emerald-400" />
+                      <span>ABM Proveedores</span>
+                    </button>
+
+                    <button
+                      onClick={() => {
                         onTabChange('document_types');
                         setShowMastersMenu(false);
                       }}
