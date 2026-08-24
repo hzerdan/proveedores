@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { Navbar, NavigationTab } from './components/layout/Navbar';
 import { LoginForm } from './components/auth/LoginForm';
@@ -316,24 +316,23 @@ function MainContent() {
   );
 }
 
+function getInitialMobileToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const queryToken = params.get('capture_token');
+  if (queryToken) return queryToken;
+
+  const path = window.location.pathname;
+  if (path.startsWith('/capture/')) {
+    const pathToken = path.replace('/capture/', '').trim();
+    if (pathToken) return pathToken;
+  }
+  return null;
+}
+
 export function App() {
-  // Check if current URL is for mobile QR capture (e.g. ?capture_token=... or /capture/...)
-  const [mobileToken, setMobileToken] = useState<string | null>(null);
-
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const queryToken = params.get('capture_token');
-    if (queryToken) {
-      setMobileToken(queryToken);
-      return;
-    }
-
-    const path = window.location.pathname;
-    if (path.startsWith('/capture/')) {
-      const pathToken = path.replace('/capture/', '').trim();
-      if (pathToken) setMobileToken(pathToken);
-    }
-  }, []);
+  // Check synchronously if current URL is for mobile QR capture
+  const [mobileToken] = useState<string | null>(getInitialMobileToken);
 
   if (mobileToken) {
     return <MobileCapturePage captureToken={mobileToken} />;

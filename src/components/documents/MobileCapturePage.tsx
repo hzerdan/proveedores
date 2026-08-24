@@ -23,9 +23,15 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
     const validateToken = async () => {
       setLoadingSession(true);
       try {
-        const { data, error: rpcErr } = await supabase.rpc('rpc_get_upload_session_status', {
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Tiempo de espera agotado al conectar con el servidor')), 8000)
+        );
+
+        const rpcPromise = supabase.rpc('rpc_get_upload_session_status', {
           p_session_token: captureToken,
         });
+
+        const { data, error: rpcErr }: any = await Promise.race([rpcPromise, timeoutPromise]);
 
         if (rpcErr) throw rpcErr;
         if (!data || !data.valid) {
