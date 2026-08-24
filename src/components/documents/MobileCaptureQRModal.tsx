@@ -93,11 +93,29 @@ export const MobileCaptureQRModal: React.FC<MobileCaptureQRModalProps> = ({
     return () => clearInterval(interval);
   }, [isOpen, sessionToken, status, onExtractionReady, onClose]);
 
+  const isLocalhost = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+  const [customHost, setCustomHost] = useState<string>(() => {
+    return localStorage.getItem('leon_dev_lan_ip') || (isLocalhost ? '192.168.1.66' : window.location.hostname);
+  });
+  const [editingIp, setEditingIp] = useState(false);
+
   if (!isOpen) return null;
 
+  const currentPort = window.location.port ? `:${window.location.port}` : '';
+  const currentProtocol = window.location.protocol || 'http:';
+  const effectiveOrigin = isLocalhost && customHost
+    ? `${currentProtocol}//${customHost}${currentPort}`
+    : window.location.origin;
+
   const mobileUrl = sessionToken
-    ? `${window.location.origin}/?capture_token=${sessionToken}`
+    ? `${effectiveOrigin}/?capture_token=${sessionToken}`
     : '';
+
+  const handleSaveIp = (newIp: string) => {
+    setCustomHost(newIp);
+    localStorage.setItem('leon_dev_lan_ip', newIp);
+    setEditingIp(false);
+  };
 
   // Quick Google Chart API QR Generator (or standard vector SVG)
   const qrCodeUrl = mobileUrl
@@ -179,8 +197,46 @@ export const MobileCaptureQRModal: React.FC<MobileCaptureQRModalProps> = ({
                 </button>
               </div>
 
+              {/* Wi-Fi Local IP Settings for Dev */}
+              {isLocalhost && (
+                <div className="pt-1 text-[11px] text-slate-400">
+                  {editingIp ? (
+                    <div className="flex items-center justify-center space-x-2 bg-slate-800/80 p-2 rounded-xl border border-slate-700">
+                      <span className="text-slate-400">IP Wi-Fi:</span>
+                      <input
+                        type="text"
+                        defaultValue={customHost}
+                        id="dev-lan-ip-input"
+                        className="bg-slate-900 border border-slate-700 rounded px-2 py-0.5 text-white font-mono text-xs w-32 text-center"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const input = document.getElementById('dev-lan-ip-input') as HTMLInputElement;
+                          if (input) handleSaveIp(input.value.trim());
+                        }}
+                        className="px-2 py-0.5 rounded bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs"
+                      >
+                        OK
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-center justify-center space-x-1.5">
+                      <span>Red Wi-Fi IP: <strong className="text-sky-300 font-mono">{customHost}</strong></span>
+                      <button
+                        type="button"
+                        onClick={() => setEditingIp(true)}
+                        className="text-xs text-sky-400 hover:underline ml-1"
+                      >
+                        (Cambiar IP)
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <p className="text-[11px] text-slate-400">
-                Sesión temporal válida por 15 minutos. No requiere iniciar sesión en el celular.
+                Tu celular debe estar conectado a la misma red Wi-Fi que la computadora.
               </p>
             </div>
           )}
