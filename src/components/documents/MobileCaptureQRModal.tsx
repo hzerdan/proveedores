@@ -60,7 +60,10 @@ export const MobileCaptureQRModal: React.FC<MobileCaptureQRModalProps> = ({
           p_session_token: sessionToken,
         });
 
-        if (error) return;
+        if (error) {
+          console.warn('Polling session status warning:', error);
+          return;
+        }
 
         if (data) {
           if (data.status === 'EXPIRED') {
@@ -70,25 +73,55 @@ export const MobileCaptureQRModal: React.FC<MobileCaptureQRModalProps> = ({
             setStatus('EXTRACTING');
             clearInterval(interval);
 
-            // Execute AI Extraction
-            const extractionRes = await extractInvoiceFromStorage(
-              data.storage_path,
-              data.file_name || 'mobile_capture.jpg',
-              data.mime_type || 'image/jpeg',
-              data.file_id
-            );
+            try {
+              // Execute AI Extraction
+              const extractionRes = await extractInvoiceFromStorage(
+                data.storage_path,
+                data.file_name || 'mobile_capture.jpg',
+                data.mime_type || 'image/jpeg',
+                data.file_id
+              );
 
-            setStatus('DONE');
-            setTimeout(() => {
-              onExtractionReady(extractionRes.data, extractionRes.file_id);
-              onClose();
-            }, 600);
+              setStatus('DONE');
+              setTimeout(() => {
+                onExtractionReady(extractionRes.data, extractionRes.file_id);
+                onClose();
+              }, 400);
+            } catch (aiErr: any) {
+              console.error('Error during AI extraction, proceeding to manual review:', aiErr);
+              setStatus('DONE');
+              setTimeout(() => {
+                onExtractionReady(
+                  {
+                    supplier: { tax_id: null, legal_name: null, trade_name: null },
+                    document: {
+                      type_code: 'FACTURA',
+                      letter: 'A',
+                      point_of_sale: null,
+                      document_number: null,
+                      issue_date: new Date().toISOString().split('T')[0],
+                      due_date: null,
+                      currency: 'ARS',
+                      total_amount: null,
+                      cae: null,
+                      cae_due_date: null,
+                      concept: 'Comprobante capturado desde celular',
+                    },
+                    uncertain_fields: [],
+                    warnings: ['No se pudo completar la extracción automática por IA. Podés ingresar los datos manualmente.'],
+                    missing_fields: [],
+                  },
+                  data.file_id
+                );
+                onClose();
+              }, 400);
+            }
           }
         }
       } catch (err) {
         console.error('Error checking session status:', err);
       }
-    }, 1500);
+    }, 1200);
 
     return () => clearInterval(interval);
   }, [isOpen, sessionToken, status, onExtractionReady, onClose]);

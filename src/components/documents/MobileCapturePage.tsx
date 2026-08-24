@@ -140,29 +140,39 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
     setError(null);
 
     try {
-      const sanitizedName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+      const sanitizedName = (fileName || 'comprobante.jpg').replace(/[^a-zA-Z0-9._-]/g, '_');
       const storagePath = `temp-uploads/${sessionInfo.session_id}/${Date.now()}_${sanitizedName}`;
 
-      // Upload compressed Blob to Storage
+      // Convert Blob to File
+      const fileToUpload = new File([selectedBlob], sanitizedName, { type: 'image/jpeg' });
+
+      // Upload to Storage
       const { error: uploadErr } = await supabase.storage
         .from('supplier-documents')
-        .upload(storagePath, selectedBlob, {
+        .upload(storagePath, fileToUpload, {
           contentType: 'image/jpeg',
           upsert: true,
         });
 
-      if (uploadErr) throw uploadErr;
+      if (uploadErr) {
+        console.error('Storage upload error:', uploadErr);
+        throw new Error(`Error de almacenamiento: ${uploadErr.message}`);
+      }
 
       // Submit via RPC
       const { data: submitRes, error: submitErr } = await supabase.rpc('rpc_submit_mobile_upload', {
         p_session_token: captureToken,
         p_storage_path: storagePath,
-        p_file_name: fileName,
+        p_file_name: sanitizedName,
         p_mime_type: 'image/jpeg',
         p_file_size: selectedBlob.size,
       });
 
-      if (submitErr) throw submitErr;
+      if (submitErr) {
+        console.error('RPC submit error:', submitErr);
+        throw new Error(`Error al registrar subida: ${submitErr.message}`);
+      }
+
       if (submitRes && submitRes.success) {
         setUploadSuccess(true);
       } else {
@@ -253,6 +263,13 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
             <p className="text-[11px] text-center text-slate-400">
               Asegurate de que los números, fecha y CUIT sean legibles.
             </p>
+
+            {error && (
+              <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 flex items-center space-x-2 text-xs text-left">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
 
             <div className="flex space-x-3 pt-2">
               <button
