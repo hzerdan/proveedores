@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { supabase } from '../lib/supabase';
 import { Profile } from '../types/database';
 
@@ -158,10 +158,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const hasPermission = (permissionCode: string): boolean => {
-    if (roles.includes('ADMIN')) return true;
-    return permissions.includes(permissionCode);
-  };
+  const hasPermission = useCallback(
+    (permissionCode: string): boolean => {
+      if (roles.includes('ADMIN')) return true;
+      return permissions.includes(permissionCode);
+    },
+    [roles, permissions]
+  );
 
   const signIn = async (email: string, password?: string) => {
     setIsLoading(true);

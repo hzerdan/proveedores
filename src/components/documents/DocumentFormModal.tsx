@@ -40,6 +40,9 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
 
   // Form fields
   const [supplierId, setSupplierId] = useState<number | ''>(initialSupplierId || '');
+  const [sellerId, setSellerId] = useState<number | ''>('');
+  const [validSellers, setValidSellers] = useState<any[]>([]);
+  const [loadingSellers, setLoadingSellers] = useState(false);
   const [documentTypeId, setDocumentTypeId] = useState<number | ''>('');
   const [letter, setLetter] = useState('A');
   const [pointOfSale, setPointOfSale] = useState('0001');
@@ -91,6 +94,50 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
     fetchSuppliersAndTypes();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Fetch valid sellers whenever supplierId or issueDate changes
+  useEffect(() => {
+    if (!supplierId) {
+      setValidSellers([]);
+      setSellerId('');
+      return;
+    }
+
+    const fetchSellersForSupplierAndDate = async () => {
+      setLoadingSellers(true);
+      try {
+        const { data, error } = await supabase.rpc('fn_get_valid_sellers_for_supplier', {
+          p_supplier_id: Number(supplierId),
+          p_issue_date: issueDate || new Date().toISOString().split('T')[0],
+        });
+
+        if (error) throw error;
+        const sellers = data || [];
+        setValidSellers(sellers);
+
+        // Reglas de negocio:
+        // 0 vendedores -> sellerId = '' (nullable)
+        // 1 vendedor -> auto-selección obligatoria
+        // >1 vendedores -> operador debe seleccionar explícitamente (sin heurística)
+        if (sellers.length === 1) {
+          setSellerId(sellers[0].seller_id);
+        } else if (sellers.length > 1) {
+          setSellerId((prev) => {
+            const stillValid = sellers.some((s: any) => s.seller_id === Number(prev));
+            return stillValid ? prev : '';
+          });
+        } else {
+          setSellerId('');
+        }
+      } catch (err) {
+        console.error('Error fetching valid sellers for supplier:', err);
+      } finally {
+        setLoadingSellers(false);
+      }
+    };
+
+    fetchSellersForSupplierAndDate();
+  }, [supplierId, issueDate]);
 
   // Populate from initialData (AI Extraction)
   useEffect(() => {
@@ -171,6 +218,13 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
 
   const handleConfirmDoc = async (overrideReason?: string) => {
     if (!supplierId || !documentTypeId || !totalAmount) return;
+
+    // Validación estricta de vendedor con >1 vigentes
+    if (validSellers.length > 1 && !sellerId) {
+      setError('Este proveedor posee múltiples vendedores vigentes. Debe seleccionar obligatoriamente a cuál atribuir el comprobante.');
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
@@ -186,6 +240,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
         {
           p_supplier_id: Number(supplierId),
           p_document_type_id: Number(documentTypeId),
+          p_seller_id: sellerId ? Number(sellerId) : null,
           p_letter: isFiscal ? letter : null,
           p_point_of_sale: isFiscal && pointOfSale ? parseInt(pointOfSale, 10) : null,
           p_document_number: isFiscal && documentNumber ? parseInt(documentNumber, 10) : null,
@@ -193,6 +248,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
           p_issue_date: issueDate,
           p_due_date: dueDate || null,
           p_total_amount: numAmount,
+          p_currency: currency,
           p_concept: concept.trim() || null,
           p_notes: notes.trim() || null,
           p_override_reason: overrideReason || null,
@@ -352,6 +408,75 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                 ))}
               </select>
             </div>
+
+            {/* Seller / Vendedor Section */}
+            {supplierId && (
+              <div className="p-3.5 rounded-2xl bg-slate-800/40 border border-slate-700/60 space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider flex items-center space-x-1.5">
+                    <span>Vendedor Asociado</span>
+                    {validSellers.length > 1 && (
+                      <span className="text-amber-400 font-bold">* (Obligatorio)</span>
+                    )}
+                  </label>
+                  {loadingSellers && (
+                    <span className="text-[10px] text-slate-400 animate-pulse">
+                      Consultando vigencias...
+                    </span>
+                  )}
+                </div>
+
+                {validSellers.length === 0 && !loadingSellers && (
+                  <div className="flex items-center justify-between text-xs text-slate-400 bg-slate-900/60 p-2.5 rounded-xl border border-slate-800">
+                    <span className="italic">Sin vendedor asignado (Este proveedor no posee vendedores vigentes para la fecha).</span>
+                    <span className="text-[10px] bg-slate-800 text-slate-300 px-2 py-0.5 rounded-md font-medium">
+                      Opcional
+                    </span>
+                  </div>
+                )}
+
+                {validSellers.length === 1 && !loadingSellers && (
+                  <div className="flex items-center justify-between text-xs text-emerald-300 bg-emerald-950/30 p-2.5 rounded-xl border border-emerald-500/30">
+                    <div className="flex items-center space-x-2">
+                      <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <span className="font-bold">{validSellers[0].display_name}</span>
+                      {validSellers[0].seller_code && (
+                        <span className="text-[10px] font-mono text-emerald-400/80">({validSellers[0].seller_code})</span>
+                      )}
+                    </div>
+                    <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded-md font-medium">
+                      Asignado Automáticamente
+                    </span>
+                  </div>
+                )}
+
+                {validSellers.length > 1 && !loadingSellers && (
+                  <div className="space-y-1.5">
+                    <select
+                      value={sellerId}
+                      onChange={(e) => setSellerId(Number(e.target.value))}
+                      className={`w-full bg-slate-800 border rounded-xl px-3.5 py-2 text-white font-medium focus:ring-2 focus:ring-sky-500/50 ${
+                        !sellerId ? 'border-amber-500/80 bg-amber-950/10' : 'border-slate-700'
+                      }`}
+                    >
+                      <option value="" disabled>
+                        -- Seleccione obligatoriamente un vendedor ({validSellers.length} vigentes) --
+                      </option>
+                      {validSellers.map((v: any) => (
+                        <option key={v.seller_id} value={v.seller_id}>
+                          {v.display_name} {v.seller_code ? `(${v.seller_code})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    {!sellerId && (
+                      <p className="text-[11px] text-amber-400 font-medium">
+                        El proveedor posee múltiples vendedores vigentes. Debe seleccionar cuál corresponde a este comprobante.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Document Type & Fiscal Attributes */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">

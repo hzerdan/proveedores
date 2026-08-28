@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Supplier, SupplierContact } from '../../types/database';
 import { useAuth } from '../../context/AuthContext';
+import { SellerSuppliersManager } from '../sellers/SellerSuppliersManager';
 import { X, Building2, Plus, Trash2, Check, AlertCircle } from 'lucide-react';
 
 interface SupplierFormModalProps {
@@ -29,6 +30,7 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
 
   // Contacts
   const [contacts, setContacts] = useState<Partial<SupplierContact>[]>([]);
+  const [activeTab, setActiveTab] = useState<'DATA' | 'SELLERS'>('DATA');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,6 +57,7 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
       setIsActive(true);
       setContacts([]);
     }
+    setActiveTab('DATA');
     setError(null);
   }, [supplier, isOpen]);
 
@@ -177,16 +180,21 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-slate-900 border border-slate-800 w-full max-w-2xl rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+      <div className="bg-slate-900 border border-slate-800 w-full max-w-3xl rounded-3xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-800/40">
           <div className="flex items-center space-x-3">
             <div className="p-2 rounded-xl bg-sky-500/10 text-sky-400 border border-sky-500/20">
               <Building2 className="w-5 h-5" />
             </div>
-            <h2 className="text-lg font-bold text-white">
-              {supplier ? `Editar Proveedor: ${supplier.trade_name}` : 'Nuevo Proveedor'}
-            </h2>
+            <div>
+              <h2 className="text-base sm:text-lg font-bold text-white">
+                {supplier ? `Proveedor: ${supplier.trade_name}` : 'Nuevo Proveedor'}
+              </h2>
+              <p className="text-xs text-slate-400">
+                Ficha comercial, contactos administrativos y vendedores asignados
+              </p>
+            </div>
           </div>
           <button
             onClick={onClose}
@@ -196,14 +204,47 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
           </button>
         </div>
 
+        {/* Tab switcher if editing */}
+        {supplier && (
+          <div className="flex space-x-2 px-6 pt-3 border-b border-slate-800 bg-slate-950/40">
+            <button
+              type="button"
+              onClick={() => setActiveTab('DATA')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition-all border-b-2 ${
+                activeTab === 'DATA'
+                  ? 'border-sky-500 text-sky-300 bg-slate-800/60'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Datos Generales & Contactos
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('SELLERS')}
+              className={`px-3.5 py-2 text-xs font-bold rounded-t-xl transition-all border-b-2 ${
+                activeTab === 'SELLERS'
+                  ? 'border-sky-500 text-sky-300 bg-slate-800/60'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Vendedores Asignados (M:N)
+            </button>
+          </div>
+        )}
+
         {/* Content / Form */}
-        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-6 flex-1">
-          {error && (
-            <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center space-x-2">
-              <AlertCircle className="w-4 h-4 shrink-0" />
-              <span>{error}</span>
-            </div>
-          )}
+        {activeTab === 'SELLERS' && supplier ? (
+          <div className="p-6 overflow-y-auto flex-1">
+            <SellerSuppliersManager mode="FOR_SUPPLIER" supplierId={supplier.id} />
+          </div>
+        ) : (
+          <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-6 flex-1">
+            {error && (
+              <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center space-x-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
@@ -378,6 +419,7 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
             </button>
           </div>
         </form>
+        )}
       </div>
     </div>
   );

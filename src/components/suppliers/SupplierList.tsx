@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { Supplier, SupplierAccountSummary } from '../../types/database';
 import { useAuth } from '../../context/AuthContext';
 import { formatMoney } from '../../lib/formatters';
-import { Building2, Search, Plus, FileText, Phone, Mail, FilePlus } from 'lucide-react';
+import { Building2, Search, Plus, FileText, Phone, Mail, FilePlus, Edit2 } from 'lucide-react';
 
 interface SupplierListProps {
   onSelectSupplier: (supplierId: number) => void;
@@ -383,6 +383,15 @@ export const SupplierList: React.FC<SupplierListProps> = ({
                               title="Cargar Comprobante"
                             >
                               <Plus className="w-4 h-4 group-hover/btn:scale-110 transition-transform" />
+                            </button>
+                          )}
+                          {hasPermission('suppliers.manage') && (
+                            <button
+                              onClick={() => onOpenSupplierModal(supplier)}
+                              className="p-2 rounded-xl bg-slate-800 hover:bg-indigo-600/20 text-slate-300 hover:text-indigo-300 border border-slate-700/60 hover:border-indigo-500/30 transition-all shadow-sm group/btn"
+                              title="Editar Proveedor & Vendedores Asignados"
+                            >
+                              <Edit2 className="w-4 h-4 group-hover/btn:scale-110 transition-transform" />
                             </button>
                           )}
                         </div>

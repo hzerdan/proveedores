@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { SupplierAgingRow } from '../../types/database';
+import { SupplierAgingRow, SellerAgingRow } from '../../types/database';
 import { formatDate, formatMoney } from '../../lib/formatters';
 import { BucketDetailModal } from './BucketDetailModal';
 import {
@@ -8,6 +8,9 @@ import {
   Search,
   ArrowUpDown,
   Clock,
+  UserCheck,
+  Building2,
+  AlertCircle,
 } from 'lucide-react';
 
 interface SupplierAgingViewProps {
@@ -17,8 +20,10 @@ interface SupplierAgingViewProps {
 export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
   onSelectSupplierAccount,
 }) => {
+  const [dimension, setDimension] = useState<'SUPPLIERS' | 'SELLERS'>('SUPPLIERS');
   const [cutoffDate, setCutoffDate] = useState(new Date().toISOString().split('T')[0]);
   const [rows, setRows] = useState<SupplierAgingRow[]>([]);
+  const [sellerRows, setSellerRows] = useState<SellerAgingRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [currencyFilter, setCurrencyFilter] = useState('ALL');
@@ -30,7 +35,8 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
   const [drilldownParams, setDrilldownParams] = useState<{
     title: string;
     subtitle: string;
-    supplierId: number;
+    supplierId?: number;
+    sellerId?: number;
     currency: string;
     bucketCode?: string;
     expectedAmount?: number;
@@ -39,14 +45,23 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
   const fetchAgingData = async () => {
     setLoading(true);
     try {
-      const { data, error } = await supabase.rpc('rpc_get_supplier_aging', {
-        p_cutoff_date: cutoffDate,
-      });
+      if (dimension === 'SUPPLIERS') {
+        const { data, error } = await supabase.rpc('rpc_get_supplier_aging', {
+          p_cutoff_date: cutoffDate,
+        });
 
-      if (error) throw error;
-      setRows(data || []);
+        if (error) throw error;
+        setRows(data || []);
+      } else {
+        const { data, error } = await supabase.rpc('rpc_get_seller_aging', {
+          p_cutoff_date: cutoffDate,
+        });
+
+        if (error) throw error;
+        setSellerRows(data || []);
+      }
     } catch (err) {
-      console.error('Error fetching supplier aging:', err);
+      console.error('Error fetching aging data:', err);
     } finally {
       setLoading(false);
     }
@@ -55,12 +70,18 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
   useEffect(() => {
     fetchAgingData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cutoffDate]);
+  }, [cutoffDate, dimension]);
 
   // Unique currencies present
-  const availableCurrencies = Array.from(new Set(rows.map((r) => r.currency)));
+  const availableCurrencies = Array.from(
+    new Set(
+      dimension === 'SUPPLIERS'
+        ? rows.map((r) => r.currency)
+        : sellerRows.map((r) => r.currency)
+    )
+  );
 
-  // Filtered & Sorted rows
+  // Filtered & Sorted supplier rows
   const filteredRows = rows
     .filter((r) => {
       const q = search.toLowerCase();
@@ -76,6 +97,30 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
         comp = a.supplier_trade_name.localeCompare(b.supplier_trade_name);
       } else if (sortBy === 'BALANCE') {
         comp = a.net_total_balance - b.net_total_balance;
+      } else if (sortBy === 'OVERDUE') {
+        const totalOverdueA = a.overdue_gt_60 + a.overdue_31_60 + a.overdue_1_30;
+        const totalOverdueB = b.overdue_gt_60 + b.overdue_31_60 + b.overdue_1_30;
+        comp = totalOverdueA - totalOverdueB;
+      }
+      return sortOrder === 'ASC' ? comp : -comp;
+    });
+
+  // Filtered & Sorted seller rows
+  const filteredSellerRows = sellerRows
+    .filter((r) => {
+      const q = search.toLowerCase();
+      const matchSearch =
+        r.seller_display_name.toLowerCase().includes(q) ||
+        (r.seller_code && r.seller_code.toLowerCase().includes(q));
+      const matchCurrency = currencyFilter === 'ALL' || r.currency === currencyFilter;
+      return matchSearch && matchCurrency;
+    })
+    .sort((a, b) => {
+      let comp = 0;
+      if (sortBy === 'NAME') {
+        comp = a.seller_display_name.localeCompare(b.seller_display_name);
+      } else if (sortBy === 'BALANCE') {
+        comp = a.total_pending_debt - b.total_pending_debt;
       } else if (sortBy === 'OVERDUE') {
         const totalOverdueA = a.overdue_gt_60 + a.overdue_31_60 + a.overdue_1_30;
         const totalOverdueB = b.overdue_gt_60 + b.overdue_31_60 + b.overdue_1_30;
@@ -102,35 +147,67 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
     }
   > = {};
 
-  rows.forEach((r) => {
-    if (!currencyTotals[r.currency]) {
-      currencyTotals[r.currency] = {
-        overdue_gt_60: 0,
-        overdue_31_60: 0,
-        overdue_1_30: 0,
-        due_0_30: 0,
-        due_31_60: 0,
-        due_gt_60: 0,
-        no_due_date_amount: 0,
-        free_credits_amount: 0,
-        total_pending_debt: 0,
-        net_total_balance: 0,
-        count: 0,
-      };
-    }
-    const t = currencyTotals[r.currency];
-    t.overdue_gt_60 += r.overdue_gt_60;
-    t.overdue_31_60 += r.overdue_31_60;
-    t.overdue_1_30 += r.overdue_1_30;
-    t.due_0_30 += r.due_0_30;
-    t.due_31_60 += r.due_31_60;
-    t.due_gt_60 += r.due_gt_60;
-    t.no_due_date_amount += r.no_due_date_amount;
-    t.free_credits_amount += r.free_credits_amount;
-    t.total_pending_debt += r.total_pending_debt;
-    t.net_total_balance += r.net_total_balance;
-    t.count += 1;
-  });
+  if (dimension === 'SUPPLIERS') {
+    rows.forEach((r) => {
+      if (!currencyTotals[r.currency]) {
+        currencyTotals[r.currency] = {
+          overdue_gt_60: 0,
+          overdue_31_60: 0,
+          overdue_1_30: 0,
+          due_0_30: 0,
+          due_31_60: 0,
+          due_gt_60: 0,
+          no_due_date_amount: 0,
+          free_credits_amount: 0,
+          total_pending_debt: 0,
+          net_total_balance: 0,
+          count: 0,
+        };
+      }
+      const t = currencyTotals[r.currency];
+      t.overdue_gt_60 += r.overdue_gt_60;
+      t.overdue_31_60 += r.overdue_31_60;
+      t.overdue_1_30 += r.overdue_1_30;
+      t.due_0_30 += r.due_0_30;
+      t.due_31_60 += r.due_31_60;
+      t.due_gt_60 += r.due_gt_60;
+      t.no_due_date_amount += r.no_due_date_amount;
+      t.free_credits_amount += r.free_credits_amount;
+      t.total_pending_debt += r.total_pending_debt;
+      t.net_total_balance += r.net_total_balance;
+      t.count += 1;
+    });
+  } else {
+    sellerRows.forEach((r) => {
+      if (!currencyTotals[r.currency]) {
+        currencyTotals[r.currency] = {
+          overdue_gt_60: 0,
+          overdue_31_60: 0,
+          overdue_1_30: 0,
+          due_0_30: 0,
+          due_31_60: 0,
+          due_gt_60: 0,
+          no_due_date_amount: 0,
+          free_credits_amount: 0,
+          total_pending_debt: 0,
+          net_total_balance: 0,
+          count: 0,
+        };
+      }
+      const t = currencyTotals[r.currency];
+      t.overdue_gt_60 += r.overdue_gt_60;
+      t.overdue_31_60 += r.overdue_31_60;
+      t.overdue_1_30 += r.overdue_1_30;
+      t.due_0_30 += r.due_0_30;
+      t.due_31_60 += r.due_31_60;
+      t.due_gt_60 += r.due_gt_60;
+      t.no_due_date_amount += r.no_due_date_amount;
+      t.free_credits_amount += 0;
+      t.total_pending_debt += r.total_pending_debt;
+      t.net_total_balance += r.total_pending_debt;
+      t.count += 1;
+    });
+  }
 
   const handleOpenDrilldown = (
     row: SupplierAgingRow,
@@ -155,29 +232,77 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl shadow-black/20 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold text-white flex items-center space-x-2.5">
-              <Clock className="w-6 h-6 text-sky-400" />
-              <span>Saldo General de Proveedores (Aging por Vencimiento)</span>
-            </h1>
+            <div className="flex items-center space-x-3">
+              <h1 className="text-xl font-bold text-white flex items-center space-x-2.5">
+                <Clock className="w-6 h-6 text-sky-400" />
+                <span>
+                  {dimension === 'SUPPLIERS'
+                    ? 'Saldo General de Proveedores (Aging por Vencimiento)'
+                    : 'Aging de Deuda por Vendedor'}
+                </span>
+              </h1>
+            </div>
             <p className="text-xs text-slate-400 mt-1">
-              Clasificación del saldo actual abierto por rangos de vencimiento sin mezclar monedas
+              {dimension === 'SUPPLIERS'
+                ? 'Clasificación del saldo actual abierto por rangos de vencimiento sin mezclar monedas'
+                : 'Deuda comercial atribuida por vendedor con buckets idénticos de vencimiento'}
             </p>
           </div>
 
-          {/* Date Cutoff Control */}
-          <div className="flex items-center space-x-3 bg-slate-800/80 p-2 rounded-xl border border-slate-700/60">
-            <Calendar className="w-4 h-4 text-sky-400 shrink-0" />
-            <label className="text-xs font-semibold text-slate-300 whitespace-nowrap">
-              Fecha de Corte:
-            </label>
-            <input
-              type="date"
-              value={cutoffDate}
-              onChange={(e) => setCutoffDate(e.target.value)}
-              className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white font-mono focus:ring-1 focus:ring-sky-500"
-            />
+          <div className="flex flex-wrap items-center gap-3">
+            {/* Dimension Toggle */}
+            <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-xl border border-slate-700">
+              <button
+                type="button"
+                onClick={() => setDimension('SUPPLIERS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                  dimension === 'SUPPLIERS'
+                    ? 'bg-sky-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>Por Proveedor</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDimension('SELLERS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                  dimension === 'SELLERS'
+                    ? 'bg-sky-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>Por Vendedor</span>
+              </button>
+            </div>
+
+            {/* Date Cutoff Control */}
+            <div className="flex items-center space-x-3 bg-slate-800/80 p-2 rounded-xl border border-slate-700/60">
+              <Calendar className="w-4 h-4 text-sky-400 shrink-0" />
+              <label className="text-xs font-semibold text-slate-300 whitespace-nowrap">
+                Fecha de Corte:
+              </label>
+              <input
+                type="date"
+                value={cutoffDate}
+                onChange={(e) => setCutoffDate(e.target.value)}
+                className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white font-mono focus:ring-1 focus:ring-sky-500"
+              />
+            </div>
           </div>
         </div>
+
+        {/* Banner Contextual para Modo Vendedor */}
+        {dimension === 'SELLERS' && (
+          <div className="p-3 rounded-xl bg-sky-950/40 border border-sky-500/30 text-sky-300 text-xs flex items-center space-x-2.5">
+            <AlertCircle className="w-4 h-4 text-sky-400 shrink-0" />
+            <span>
+              <strong>Aislamiento de Créditos Libres:</strong> La vista por Vendedor muestra la deuda atribuida de cada comprobante. Los créditos libres (OP sin imputar / Remanentes) pertenecen a la cuenta corriente del proveedor y se gestionan desde el Saldo General y Reconciliación.
+            </span>
+          </div>
+        )}
 
         {/* Filter and Sorting Toolbar */}
         <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-800">
@@ -185,7 +310,7 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
             <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar por proveedor o CUIT..."
+              placeholder={dimension === 'SUPPLIERS' ? 'Buscar por proveedor o CUIT...' : 'Buscar por vendedor o código...'}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-400 focus:ring-2 focus:ring-sky-500/50"
@@ -218,7 +343,7 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
                 onChange={(e) => setSortBy(e.target.value as any)}
                 className="bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-white font-medium"
               >
-                <option value="NAME">Proveedor</option>
+                <option value="NAME">{dimension === 'SUPPLIERS' ? 'Proveedor' : 'Vendedor'}</option>
                 <option value="BALANCE">Saldo Total</option>
                 <option value="OVERDUE">Mayor Vencido</option>
               </select>
@@ -331,13 +456,13 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
                     Calculando envejecimiento de saldos...
                   </td>
                 </tr>
-              ) : filteredRows.length === 0 ? (
+              ) : (dimension === 'SUPPLIERS' ? filteredRows.length === 0 : filteredSellerRows.length === 0) ? (
                 <tr>
                   <td colSpan={12} className="py-12 text-center text-slate-500 italic font-sans">
                     No existen saldos abiertos bajo los criterios de búsqueda.
                   </td>
                 </tr>
-              ) : (
+              ) : dimension === 'SUPPLIERS' ? (
                 filteredRows.map((row) => {
                   return (
                     <tr
@@ -566,6 +691,87 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
                     </tr>
                   );
                 })
+              ) : (
+                /* Mode SELLERS */
+                filteredSellerRows.map((sRow) => (
+                  <tr
+                    key={`${sRow.seller_id}-${sRow.currency}`}
+                    className="hover:bg-slate-800/40 transition-colors"
+                  >
+                    {/* Seller Name (Sticky) */}
+                    <td className="px-4 py-3 font-sans sticky left-0 bg-slate-900 z-10">
+                      <div className="flex items-center space-x-2">
+                        <UserCheck className="w-4 h-4 text-emerald-400 shrink-0" />
+                        <span className="font-bold text-white whitespace-nowrap">
+                          {sRow.seller_display_name}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 whitespace-nowrap mt-0.5">
+                        {sRow.seller_code && (
+                          <span className="font-mono text-sky-300 mr-2">{sRow.seller_code}</span>
+                        )}
+                        <span>{sRow.active_suppliers_count} proveedor(es) con deuda</span>
+                      </div>
+                    </td>
+
+                    {/* Currency */}
+                    <td className="px-3 py-3 text-center whitespace-nowrap">
+                      <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 border border-slate-700 text-sky-300 font-bold">
+                        {sRow.currency}
+                      </span>
+                    </td>
+
+                    {/* Overdue > 60 */}
+                    <td className="px-3 py-3 text-right whitespace-nowrap font-bold text-rose-400">
+                      {sRow.overdue_gt_60 > 0 ? formatMoney(sRow.overdue_gt_60) : <span className="text-slate-600 font-normal">-</span>}
+                    </td>
+
+                    {/* Overdue 31-60 */}
+                    <td className="px-3 py-3 text-right whitespace-nowrap font-bold text-rose-300">
+                      {sRow.overdue_31_60 > 0 ? formatMoney(sRow.overdue_31_60) : <span className="text-slate-600 font-normal">-</span>}
+                    </td>
+
+                    {/* Overdue 1-30 */}
+                    <td className="px-3 py-3 text-right whitespace-nowrap font-bold text-rose-200">
+                      {sRow.overdue_1_30 > 0 ? formatMoney(sRow.overdue_1_30) : <span className="text-slate-600 font-normal">-</span>}
+                    </td>
+
+                    {/* Due 0-30 */}
+                    <td className="px-3 py-3 text-right whitespace-nowrap font-bold text-sky-200">
+                      {sRow.due_0_30 > 0 ? formatMoney(sRow.due_0_30) : <span className="text-slate-600 font-normal">-</span>}
+                    </td>
+
+                    {/* Due 31-60 */}
+                    <td className="px-3 py-3 text-right whitespace-nowrap font-bold text-sky-300">
+                      {sRow.due_31_60 > 0 ? formatMoney(sRow.due_31_60) : <span className="text-slate-600 font-normal">-</span>}
+                    </td>
+
+                    {/* Due > 60 */}
+                    <td className="px-3 py-3 text-right whitespace-nowrap font-bold text-sky-400">
+                      {sRow.due_gt_60 > 0 ? formatMoney(sRow.due_gt_60) : <span className="text-slate-600 font-normal">-</span>}
+                    </td>
+
+                    {/* No Due Date */}
+                    <td className="px-3 py-3 text-right whitespace-nowrap font-bold text-amber-300">
+                      {sRow.no_due_date_amount > 0 ? formatMoney(sRow.no_due_date_amount) : <span className="text-slate-600 font-normal">-</span>}
+                    </td>
+
+                    {/* Free Credits (Isolated) */}
+                    <td className="px-3 py-3 text-right whitespace-nowrap text-slate-500 italic">
+                      -
+                    </td>
+
+                    {/* Total Pending Debt */}
+                    <td className="px-4 py-3 text-right font-bold text-rose-400 whitespace-nowrap">
+                      {formatMoney(sRow.total_pending_debt)}
+                    </td>
+
+                    {/* Action */}
+                    <td className="px-3 py-3 text-center font-sans whitespace-nowrap text-slate-500">
+                      -
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>

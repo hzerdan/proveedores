@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { Navbar, NavigationTab } from './components/layout/Navbar';
+import { AppLayout } from './components/layout/AppLayout';
+import { NavigationTab } from './config/navigation';
 import { LoginForm } from './components/auth/LoginForm';
 import { SupplierList } from './components/suppliers/SupplierList';
 import { SupplierFormModal } from './components/suppliers/SupplierFormModal';
+import { SellerList } from './components/sellers/SellerList';
 import { AccountStatement } from './components/accounts/AccountStatement';
 import { SupplierAgingView } from './components/aging/SupplierAgingView';
 import { PaymentProjectionView } from './components/projection/PaymentProjectionView';
@@ -140,61 +142,58 @@ function MainContent() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col selection:bg-sky-500 selection:text-white">
-      {/* Navbar with full Navigation */}
-      <Navbar currentTab={currentTab} onTabChange={setCurrentTab} />
+    <AppLayout currentTab={currentTab} onTabChange={setCurrentTab}>
+      {currentTab === 'suppliers' && (
+        <SupplierList
+          key={`sup-${refreshKey}`}
+          onSelectSupplier={handleSelectSupplierFromList}
+          onNewDocument={handleNewDocument}
+          onOpenSupplierModal={handleOpenSupplierModal}
+        />
+      )}
 
-      {/* Main Container */}
-      <main className="flex-1 max-w-[1680px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-        {currentTab === 'suppliers' && (
-          <SupplierList
-            key={`sup-${refreshKey}`}
-            onSelectSupplier={handleSelectSupplierFromList}
-            onNewDocument={handleNewDocument}
-            onOpenSupplierModal={handleOpenSupplierModal}
-          />
-        )}
+      {currentTab === 'sellers' && (
+        <SellerList
+          key={`seller-${refreshKey}`}
+          onOpenSupplierAccount={handleSelectSupplierFromList}
+          onOpenDocumentDetail={handleViewDocumentDetail}
+        />
+      )}
 
-        {currentTab === 'accounts' && (
-          <AccountStatement
-            key={`acc-${refreshKey}-${selectedSupplierId}`}
-            selectedSupplierId={selectedSupplierId}
-            onSelectSupplier={setSelectedSupplierId}
-            onNewDocument={handleNewDocument}
-            onNewPaymentOrder={handleNewPaymentOrder}
-            onApplyBalance={handleApplyBalance}
-            onReverseDocument={handleReverseDocument}
-            onDesimpute={handleOpenDesimpute}
-            onViewDocumentDetail={handleViewDocumentDetail}
-            onViewReferenceMovements={handleViewReferenceMovements}
-          />
-        )}
+      {currentTab === 'accounts' && (
+        <AccountStatement
+          key={`acc-${refreshKey}-${selectedSupplierId}`}
+          selectedSupplierId={selectedSupplierId}
+          onSelectSupplier={setSelectedSupplierId}
+          onNewDocument={handleNewDocument}
+          onNewPaymentOrder={handleNewPaymentOrder}
+          onApplyBalance={handleApplyBalance}
+          onReverseDocument={handleReverseDocument}
+          onDesimpute={handleOpenDesimpute}
+          onViewDocumentDetail={handleViewDocumentDetail}
+          onViewReferenceMovements={handleViewReferenceMovements}
+        />
+      )}
 
-        {currentTab === 'aging' && (
-          <SupplierAgingView
-            key={`aging-${refreshKey}`}
-            onSelectSupplierAccount={handleSelectSupplierFromList}
-          />
-        )}
+      {currentTab === 'aging' && (
+        <SupplierAgingView
+          key={`aging-${refreshKey}`}
+          onSelectSupplierAccount={handleSelectSupplierFromList}
+        />
+      )}
 
-        {currentTab === 'projection' && (
-          <PaymentProjectionView
-            key={`proj-${refreshKey}`}
-            onSelectSupplierAccount={handleSelectSupplierFromList}
-          />
-        )}
+      {currentTab === 'projection' && (
+        <PaymentProjectionView
+          key={`proj-${refreshKey}`}
+          onSelectSupplierAccount={handleSelectSupplierFromList}
+        />
+      )}
 
-        {currentTab === 'document_types' && <DocumentTypesMaster />}
+      {currentTab === 'document_types' && <DocumentTypesMaster />}
 
-        {currentTab === 'users_security' && <UsersSecurityMaster />}
+      {currentTab === 'users_security' && <UsersSecurityMaster />}
 
-        {currentTab === 'audit_logs' && <AuditLogsMaster />}
-      </main>
-
-      {/* Footer */}
-      <footer className="border-t border-slate-800/80 bg-slate-900/40 py-4 text-center text-xs text-slate-500">
-        <p>León Proveedores • Sistema Integral de Cuentas Corrientes y Facturación</p>
-      </footer>
+      {currentTab === 'audit_logs' && <AuditLogsMaster />}
 
       {/* Intake Choice Modal (Manual / PDF / Image / QR) */}
       {intakeModalOpen && (
@@ -301,6 +300,7 @@ function MainContent() {
           isOpen={detailModalOpen}
           onClose={() => setDetailModalOpen(false)}
           documentId={detailDocId}
+          onOpenDocumentDetail={(id) => setDetailDocId(id)}
         />
       )}
 
@@ -312,7 +312,7 @@ function MainContent() {
           referenceId={refMovementsRefId}
         />
       )}
-    </div>
+    </AppLayout>
   );
 }
 

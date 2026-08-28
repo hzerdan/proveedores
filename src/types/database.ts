@@ -54,6 +54,56 @@ export interface Supplier {
   created_at: string;
 }
 
+export interface Seller {
+  id: number;
+  code?: string;
+  first_name: string;
+  last_name: string;
+  display_name: string;
+  phone?: string;
+  email?: string;
+  is_active: boolean;
+  notes?: string;
+  created_by?: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SupplierSeller {
+  id: number;
+  supplier_id: number;
+  seller_id: number;
+  is_active: boolean;
+  valid_from: string;
+  valid_to?: string | null;
+  notes?: string;
+  created_by?: number;
+  created_at: string;
+  seller?: Seller;
+  supplier?: Supplier;
+}
+
+export interface ActiveSupplierSeller {
+  relationship_id: number;
+  supplier_id: number;
+  supplier_trade_name: string;
+  supplier_tax_id: string;
+  seller_id: number;
+  seller_code?: string;
+  seller_first_name: string;
+  seller_last_name: string;
+  seller_display_name: string;
+  seller_phone?: string;
+  seller_email?: string;
+  valid_from: string;
+  valid_to?: string | null;
+  relationship_active: boolean;
+  seller_active: boolean;
+  is_currently_valid: boolean;
+  notes?: string;
+  created_at: string;
+}
+
 export interface SupplierContact {
   id: number;
   supplier_id: number;
@@ -84,6 +134,7 @@ export interface DocumentType {
 export interface Document {
   id: number;
   supplier_id: number;
+  seller_id?: number | null;
   document_type_id: number;
   status: DocumentStatus;
   letter?: string;
@@ -150,6 +201,9 @@ export interface DocumentSummaryView {
   supplier_id: number;
   supplier_trade_name: string;
   supplier_tax_id: string;
+  seller_id?: number | null;
+  seller_code?: string;
+  seller_display_name?: string;
   document_type_id: number;
   document_type_code: string;
   document_type_name: string;
@@ -189,6 +243,86 @@ export interface SupplierAccountSummary {
   net_account_balance: number;
 }
 
+export interface SupplierSellerBreakdownRow {
+  supplier_id: number;
+  currency: string;
+  seller_id: number | null;
+  seller_code: string | null;
+  seller_display_name: string;
+  is_unassigned_debt: boolean;
+  is_free_credit: boolean;
+  item_category: 'SELLER' | 'UNASSIGNED_DEBT' | 'FREE_CREDIT';
+  row_category?: 'SELLER' | 'UNASSIGNED_DEBT' | 'FREE_CREDIT';
+  open_doc_count: number;
+  open_documents_count?: number;
+  total_debit_amount: number;
+  pending_debt?: number;
+  total_credit_amount: number;
+  available_credit?: number;
+  net_balance: number;
+}
+
+export interface SellerAccountSummary {
+  seller_id: number;
+  seller_code: string;
+  seller_display_name: string;
+  seller_email?: string;
+  seller_phone?: string;
+  seller_is_active: boolean;
+  currency: string;
+  active_suppliers_count: number;
+  open_documents_count: number;
+  total_pending_debt: number;
+  total_available_credit: number;
+  net_seller_balance: number;
+}
+
+export interface SellerAgingRow {
+  seller_id: number;
+  seller_code: string;
+  seller_display_name: string;
+  currency: string;
+  overdue_gt_60: number;
+  overdue_31_60: number;
+  overdue_1_30: number;
+  due_0_30: number;
+  due_31_60: number;
+  due_gt_60: number;
+  no_due_date_amount: number;
+  total_pending_debt: number;
+  net_total_balance: number;
+  active_suppliers_count: number;
+}
+
+export interface SellerPaymentProjectionRecord {
+  seller_id: number;
+  seller_code: string;
+  seller_display_name: string;
+  currency: string;
+  bucket_type: 'OVERDUE' | 'WEEK' | 'NO_DUE_DATE';
+  week_start: string | null;
+  week_end: string | null;
+  amount: number;
+  doc_count: number;
+  suppliers_count: number;
+}
+
+export interface SellerSuppliersSummaryRow {
+  supplier_id: number;
+  supplier_code: string;
+  supplier_trade_name: string;
+  supplier_tax_id: string;
+  currency: string;
+  relationship_id: number | null;
+  relationship_active: boolean;
+  valid_from: string | null;
+  valid_to: string | null;
+  open_doc_count: number;
+  pending_debt: number;
+  available_credit: number;
+  net_balance: number;
+}
+
 export interface SupplierAgingRow {
   supplier_id: number;
   supplier_trade_name: string;
@@ -222,6 +356,8 @@ export interface OpenDocumentDetail {
   document_id: number;
   supplier_id: number;
   supplier_trade_name: string;
+  seller_id?: number | null;
+  seller_display_name?: string | null;
   human_reference: string;
   document_type_code: string;
   document_type_name: string;
@@ -234,3 +370,44 @@ export interface OpenDocumentDetail {
   concept?: string;
   notes?: string;
 }
+
+export type DocumentSellerChangeType = 'HISTORICAL_ASSIGNMENT' | 'CORRECTION';
+
+export type DocumentSellerRelationValidityStatus =
+  | 'VALID_FOR_DOCUMENT_DATE'
+  | 'CURRENT_RELATION_OUTSIDE_DOCUMENT_DATE'
+  | 'HISTORICAL_RELATION_OUTSIDE_DOCUMENT_DATE';
+
+export interface DocumentSellerHistory {
+  id: number;
+  document_id: number;
+  old_seller_id?: number | null;
+  new_seller_id: number;
+  change_type: DocumentSellerChangeType;
+  relation_validity_status: DocumentSellerRelationValidityStatus;
+  reason: string;
+  changed_by: number;
+  changed_at: string;
+  old_seller?: Seller | null;
+  new_seller?: Seller | null;
+  changer?: Profile | null;
+  document?: Document | null;
+}
+
+export interface EligibleSellerForDocument {
+  relationship_id: number;
+  seller_id: number;
+  seller_code?: string;
+  first_name: string;
+  last_name: string;
+  display_name: string;
+  phone?: string;
+  email?: string;
+  valid_from: string;
+  valid_to?: string | null;
+  is_relationship_active: boolean;
+  is_seller_active: boolean;
+  relation_validity_status: DocumentSellerRelationValidityStatus;
+  relation_validity_label: string;
+}
+

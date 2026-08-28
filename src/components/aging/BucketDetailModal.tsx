@@ -9,7 +9,8 @@ interface BucketDetailModalProps {
   onClose: () => void;
   title: string;
   subtitle: string;
-  supplierId: number;
+  supplierId?: number;
+  sellerId?: number;
   currency: string;
   context: 'AGING' | 'PROJECTION';
   bucketCode?: string;
@@ -26,6 +27,7 @@ export const BucketDetailModal: React.FC<BucketDetailModalProps> = ({
   title,
   subtitle,
   supplierId,
+  sellerId,
   currency,
   context,
   bucketCode,
@@ -39,24 +41,37 @@ export const BucketDetailModal: React.FC<BucketDetailModalProps> = ({
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!isOpen || !supplierId) return;
+    if (!isOpen || (!supplierId && !sellerId)) return;
 
     const fetchDetail = async () => {
       setLoading(true);
       try {
-        const { data, error } = await supabase.rpc('rpc_get_open_documents_detail', {
-          p_supplier_id: supplierId,
-          p_currency: currency,
-          p_context: context,
-          p_bucket_code: bucketCode || null,
-          p_cutoff_date: cutoffDate,
-          p_week_start: weekStart || null,
-          p_date_from: dateFrom || null,
-          p_date_to: dateTo || null,
-        });
+        if (sellerId) {
+          const { data, error } = await supabase.rpc('rpc_get_seller_documents_detail', {
+            p_seller_id: sellerId,
+            p_currency: currency,
+            p_context: context,
+            p_bucket_code: bucketCode || null,
+            p_cutoff_date: cutoffDate,
+          });
 
-        if (error) throw error;
-        setDocuments(data || []);
+          if (error) throw error;
+          setDocuments(data || []);
+        } else if (supplierId) {
+          const { data, error } = await supabase.rpc('rpc_get_open_documents_detail', {
+            p_supplier_id: supplierId,
+            p_currency: currency,
+            p_context: context,
+            p_bucket_code: bucketCode || null,
+            p_cutoff_date: cutoffDate,
+            p_week_start: weekStart || null,
+            p_date_from: dateFrom || null,
+            p_date_to: dateTo || null,
+          });
+
+          if (error) throw error;
+          setDocuments(data || []);
+        }
       } catch (err) {
         console.error('Error fetching bucket documents detail:', err);
       } finally {
@@ -65,7 +80,7 @@ export const BucketDetailModal: React.FC<BucketDetailModalProps> = ({
     };
 
     fetchDetail();
-  }, [isOpen, supplierId, currency, context, bucketCode, cutoffDate, weekStart, dateFrom, dateTo]);
+  }, [isOpen, supplierId, sellerId, currency, context, bucketCode, cutoffDate, weekStart, dateFrom, dateTo]);
 
   if (!isOpen) return null;
 
@@ -139,7 +154,7 @@ export const BucketDetailModal: React.FC<BucketDetailModalProps> = ({
                     <th className="px-4 py-2.5 whitespace-nowrap">Tipo</th>
                     <th className="px-4 py-2.5 whitespace-nowrap">Emisión</th>
                     <th className="px-4 py-2.5 whitespace-nowrap">Vencimiento</th>
-                    <th className="px-4 py-2.5 text-right whitespace-nowrap">Importe Facial</th>
+                    <th className="px-4 py-2.5 text-right whitespace-nowrap">Importe Total</th>
                     <th className="px-4 py-2.5 text-right whitespace-nowrap">Saldo Pendiente</th>
                   </tr>
                 </thead>

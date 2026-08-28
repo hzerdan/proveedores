@@ -8,6 +8,8 @@ import {
   Search,
   TrendingUp,
   AlertCircle,
+  Building2,
+  UserCheck,
 } from 'lucide-react';
 
 interface PaymentProjectionViewProps {
@@ -21,9 +23,22 @@ interface WeekColumn {
   label: string;
 }
 
+interface PivotRow {
+  entity_id: number;
+  entity_name: string;
+  entity_code: string;
+  active_suppliers_count?: number;
+  currency: string;
+  overdue: number;
+  weeks: Record<string, number>;
+  noDueDate: number;
+  total: number;
+}
+
 export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
   onSelectSupplierAccount,
 }) => {
+  const [dimension, setDimension] = useState<'SUPPLIERS' | 'SELLERS'>('SUPPLIERS');
   const [cutoffDate, setCutoffDate] = useState(new Date().toISOString().split('T')[0]);
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
@@ -38,7 +53,7 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
   const [drilldownParams, setDrilldownParams] = useState<{
     title: string;
     subtitle: string;
-    supplierId: number;
+    supplierId?: number;
     currency: string;
     bucketCode?: string;
     weekStart?: string | null;
@@ -55,7 +70,12 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
 
     setLoading(true);
     try {
-      const { data, error: rpcErr } = await supabase.rpc('rpc_get_payment_projection', {
+      const rpcName =
+        dimension === 'SUPPLIERS'
+          ? 'rpc_get_payment_projection'
+          : 'rpc_get_seller_payment_projection';
+
+      const { data, error: rpcErr } = await supabase.rpc(rpcName, {
         p_cutoff_date: cutoffDate,
         p_date_from: dateFrom || null,
         p_date_to: dateTo || null,
@@ -74,7 +94,7 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
   useEffect(() => {
     fetchProjectionData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cutoffDate, dateFrom, dateTo]);
+  }, [cutoffDate, dateFrom, dateTo, dimension]);
 
   // Extract distinct chronological weeks
   const weekMap = new Map<string, WeekColumn>();
@@ -97,27 +117,24 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
     a.start.localeCompare(b.start)
   );
 
-  // Group records by supplier_id + currency
-  interface SupplierPivotRow {
-    supplier_id: number;
-    supplier_trade_name: string;
-    supplier_tax_id: string;
-    currency: string;
-    overdue: number;
-    weeks: Record<string, number>;
-    noDueDate: number;
-    total: number;
-  }
-
-  const pivotMap = new Map<string, SupplierPivotRow>();
+  const pivotMap = new Map<string, PivotRow>();
 
   records.forEach((r) => {
-    const rowKey = `${r.supplier_id}-${r.currency}`;
+    const id = dimension === 'SUPPLIERS' ? r.supplier_id : (r as any).seller_id || r.supplier_id;
+    const name =
+      dimension === 'SUPPLIERS'
+        ? r.supplier_trade_name
+        : (r as any).seller_display_name || 'Vendedor';
+    const code =
+      dimension === 'SUPPLIERS' ? r.supplier_tax_id : (r as any).seller_code || '';
+
+    const rowKey = `${id}-${r.currency}`;
     if (!pivotMap.has(rowKey)) {
       pivotMap.set(rowKey, {
-        supplier_id: r.supplier_id,
-        supplier_trade_name: r.supplier_trade_name,
-        supplier_tax_id: r.supplier_tax_id,
+        entity_id: id,
+        entity_name: name,
+        entity_code: code,
+        active_suppliers_count: (r as any).active_suppliers_count,
         currency: r.currency,
         overdue: 0,
         weeks: {},
@@ -145,12 +162,12 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
     .filter((row) => {
       const q = search.toLowerCase();
       const matchSearch =
-        row.supplier_trade_name.toLowerCase().includes(q) ||
-        row.supplier_tax_id.toLowerCase().includes(q);
+        row.entity_name.toLowerCase().includes(q) ||
+        row.entity_code.toLowerCase().includes(q);
       const matchCurrency = currencyFilter === 'ALL' || row.currency === currencyFilter;
       return matchSearch && matchCurrency;
     })
-    .sort((a, b) => a.supplier_trade_name.localeCompare(b.supplier_trade_name));
+    .sort((a, b) => a.entity_name.localeCompare(b.entity_name));
 
   // Weekly & Overall Totals strictly by currency
   const currencyTotals: Record<
@@ -160,7 +177,7 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
       weeks: Record<string, number>;
       noDueDate: number;
       total: number;
-      supplierCount: number;
+      entityCount: number;
     }
   > = {};
 
@@ -171,14 +188,14 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
         weeks: {},
         noDueDate: 0,
         total: 0,
-        supplierCount: 0,
+        entityCount: 0,
       };
     }
     const tot = currencyTotals[row.currency];
     tot.overdue += row.overdue;
     tot.noDueDate += row.noDueDate;
     tot.total += row.total;
-    tot.supplierCount += 1;
+    tot.entityCount += 1;
 
     Object.entries(row.weeks).forEach(([wStart, amt]) => {
       tot.weeks[wStart] = (tot.weeks[wStart] || 0) + amt;
@@ -186,22 +203,24 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
   });
 
   const handleOpenDrilldown = (
-    row: SupplierPivotRow,
+    row: PivotRow,
     bucketCode: string,
     bucketLabel: string,
     amount: number,
     weekStart?: string
   ) => {
-    setDrilldownParams({
-      title: `${row.supplier_trade_name} • ${bucketLabel}`,
-      subtitle: `Fecha de corte: ${formatDate(cutoffDate)}`,
-      supplierId: row.supplier_id,
-      currency: row.currency,
-      bucketCode,
-      weekStart,
-      expectedAmount: amount,
-    });
-    setDrilldownModalOpen(true);
+    if (dimension === 'SUPPLIERS') {
+      setDrilldownParams({
+        title: `${row.entity_name} • ${bucketLabel}`,
+        subtitle: `Fecha de corte: ${formatDate(cutoffDate)}`,
+        supplierId: row.entity_id,
+        currency: row.currency,
+        bucketCode,
+        weekStart,
+        expectedAmount: amount,
+      });
+      setDrilldownModalOpen(true);
+    }
   };
 
   return (
@@ -210,17 +229,52 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl shadow-black/20 space-y-4">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <h1 className="text-xl font-bold text-white flex items-center space-x-2.5">
-              <TrendingUp className="w-6 h-6 text-emerald-400" />
-              <span>Proyección de Pagos por Semana (Lunes a Domingo)</span>
-            </h1>
+            <div className="flex items-center space-x-3">
+              <h1 className="text-xl font-bold text-white flex items-center space-x-2.5">
+                <TrendingUp className="w-6 h-6 text-emerald-400" />
+                <span>
+                  {dimension === 'SUPPLIERS'
+                    ? 'Proyección de Pagos por Semana (Lunes a Domingo)'
+                    : 'Proyección de Pagos por Vendedor'}
+                </span>
+              </h1>
+            </div>
             <p className="text-xs text-slate-400 mt-1">
-              Obligaciones reales de pago agrupadas en semanas calendario sin horizontes truncados
+              {dimension === 'SUPPLIERS'
+                ? 'Obligaciones reales de pago agrupadas en semanas calendario sin horizontes truncados'
+                : 'Proyección semanal de deuda atribuida a cada vendedor según fecha de vencimiento'}
             </p>
           </div>
 
-          {/* Date Cutoff and Range Filters */}
           <div className="flex flex-wrap items-center gap-3">
+            {/* Dimension Toggle */}
+            <div className="flex items-center space-x-1 bg-slate-800 p-1 rounded-xl border border-slate-700">
+              <button
+                type="button"
+                onClick={() => setDimension('SUPPLIERS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                  dimension === 'SUPPLIERS'
+                    ? 'bg-sky-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Building2 className="w-3.5 h-3.5" />
+                <span>Por Proveedor</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setDimension('SELLERS')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center space-x-1.5 ${
+                  dimension === 'SELLERS'
+                    ? 'bg-sky-600 text-white shadow-md'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <UserCheck className="w-3.5 h-3.5" />
+                <span>Por Vendedor</span>
+              </button>
+            </div>
+
             {/* Cutoff Date */}
             <div className="flex items-center space-x-2 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700/60 text-xs">
               <Calendar className="w-4 h-4 text-sky-400 shrink-0" />
@@ -277,7 +331,7 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
             <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-400" />
             <input
               type="text"
-              placeholder="Buscar por proveedor o CUIT..."
+              placeholder={dimension === 'SUPPLIERS' ? 'Buscar por proveedor o CUIT...' : 'Buscar por vendedor o código...'}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-9 pr-3 py-1.5 text-xs text-white placeholder-slate-400 focus:ring-2 focus:ring-emerald-500/50"
@@ -309,7 +363,7 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
             <thead className="bg-slate-800/50 text-[10px] uppercase text-slate-400 font-semibold border-b border-slate-800">
               <tr>
                 <th className="px-4 py-3 whitespace-nowrap sticky left-0 bg-slate-900 z-10">
-                  Proveedor
+                  {dimension === 'SUPPLIERS' ? 'Proveedor' : 'Vendedor'}
                 </th>
                 <th className="px-3 py-3 whitespace-nowrap text-center">Moneda</th>
                 <th className="px-3 py-3 text-right text-rose-400 whitespace-nowrap">Vencido</th>
@@ -350,16 +404,17 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
               ) : (
                 filteredRows.map((row) => (
                   <tr
-                    key={`${row.supplier_id}-${row.currency}`}
+                    key={`${row.entity_id}-${row.currency}`}
                     className="hover:bg-slate-800/40 transition-colors"
                   >
-                    {/* Supplier (Sticky) */}
+                    {/* Entity (Sticky) */}
                     <td className="px-4 py-3 font-sans sticky left-0 bg-slate-900 z-10">
-                      <div className="font-bold text-white whitespace-nowrap">
-                        {row.supplier_trade_name}
+                      <div className="font-bold text-white whitespace-nowrap flex items-center space-x-1.5">
+                        {dimension === 'SELLERS' && <UserCheck className="w-3.5 h-3.5 text-emerald-400" />}
+                        <span>{row.entity_name}</span>
                       </div>
                       <div className="text-[10px] text-slate-500 whitespace-nowrap">
-                        CUIT: {row.supplier_tax_id}
+                        {dimension === 'SUPPLIERS' ? `CUIT: ${row.entity_code}` : `${row.entity_code ? row.entity_code + ' • ' : ''}${row.active_suppliers_count || 0} proveedores`}
                       </div>
                     </td>
 
@@ -436,30 +491,20 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
 
                     {/* Total Row Debt */}
                     <td className="px-4 py-3 text-right font-bold text-white whitespace-nowrap">
-                      <button
-                        onClick={() =>
-                          handleOpenDrilldown(
-                            row,
-                            'ALL',
-                            'Total Deuda Proyectada',
-                            row.total
-                          )
-                        }
-                        className="hover:underline cursor-pointer text-rose-400"
-                      >
-                        {formatMoney(row.total)}
-                      </button>
+                      {formatMoney(row.total)}
                     </td>
 
                     {/* Action */}
                     <td className="px-3 py-3 text-center font-sans whitespace-nowrap">
-                      {onSelectSupplierAccount && (
+                      {dimension === 'SUPPLIERS' && onSelectSupplierAccount ? (
                         <button
-                          onClick={() => onSelectSupplierAccount(row.supplier_id)}
+                          onClick={() => onSelectSupplierAccount(row.entity_id)}
                           className="px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-sky-300 text-[11px] font-semibold transition-colors"
                         >
                           Ver CC
                         </button>
+                      ) : (
+                        <span className="text-slate-600 text-xs">-</span>
                       )}
                     </td>
                   </tr>

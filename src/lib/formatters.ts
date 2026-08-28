@@ -41,9 +41,12 @@ export function formatDateTime(dateString?: string | null): string {
 }
 
 /**
- * Formatea moneda argentina
+ * Formatea moneda argentina y multimoneda
  */
-export function formatMoney(amount?: number | null): string {
-  if (amount === undefined || amount === null || isNaN(amount)) return '$0,00';
-  return `$${amount.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+export function formatMoney(amount?: number | null, currency?: string): string {
+  if (amount === undefined || amount === null || isNaN(amount)) {
+    return currency && currency !== 'ARS' ? `${currency} 0,00` : '$0,00';
+  }
+  const symbol = currency && currency !== 'ARS' ? `${currency} ` : '$';
+  return `${symbol}${amount.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
