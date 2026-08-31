@@ -675,7 +675,18 @@ export const AccountStatement: React.FC<AccountStatementProps> = ({
                                 <ArrowDownRight className="w-3.5 h-3.5 text-sky-400 shrink-0" />
                                 <span className="font-bold text-sky-300">{mov.reference_human_ref}</span>
                               </div>
-                              <div className="text-[10px] text-slate-500 font-sans whitespace-nowrap">ID #{mov.reference_id}</div>
+                              <div className="text-[10px] text-slate-500 font-sans whitespace-nowrap flex items-center gap-1.5 mt-0.5 flex-wrap">
+                                <span>ID #{mov.reference_id}</span>
+                                {mov.reference_seller_name ? (
+                                  <span className="px-1 py-0.2 rounded text-[9px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-sans font-semibold">
+                                    {mov.reference_seller_name}
+                                  </span>
+                                ) : (
+                                  <span className="px-1 py-0.2 rounded text-[9px] bg-amber-500/10 text-amber-300 border border-amber-500/20 font-sans font-medium">
+                                    Sin Vendedor
+                                  </span>
+                                )}
+                              </div>
                             </td>
                             <td className="px-3.5 py-3 font-sans whitespace-nowrap">
                               <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 border border-slate-700 text-slate-300 font-semibold inline-block">
@@ -759,6 +770,7 @@ export const AccountStatement: React.FC<AccountStatementProps> = ({
                         <th className="px-3 py-3 whitespace-nowrap">ID Doc</th>
                         <th className="px-3 py-3">Comprobante Comercial</th>
                         <th className="px-3 py-3 whitespace-nowrap">Tipo</th>
+                        <th className="px-3 py-3 whitespace-nowrap">Vendedor</th>
                         <th className="px-3 py-3 text-right whitespace-nowrap">Importe Total</th>
                         <th className="px-3 py-3 text-right whitespace-nowrap">Saldo de Referencia</th>
                         <th className="px-3 py-3 text-center whitespace-nowrap">Estado Derivado</th>
@@ -768,13 +780,13 @@ export const AccountStatement: React.FC<AccountStatementProps> = ({
                     <tbody className="divide-y divide-slate-800/60 font-mono text-[11px]">
                       {isLoading ? (
                         <tr>
-                          <td colSpan={9} className="py-12 text-center text-slate-400 font-sans">
+                          <td colSpan={10} className="py-12 text-center text-slate-400 font-sans">
                             Cargando documentos...
                           </td>
                         </tr>
                       ) : filteredDocs.length === 0 ? (
                         <tr>
-                          <td colSpan={9} className="py-12 text-center text-slate-500 italic font-sans">
+                          <td colSpan={10} className="py-12 text-center text-slate-500 italic font-sans">
                             No hay documentos registrados con el filtro actual.
                           </td>
                         </tr>
@@ -873,6 +885,18 @@ export const AccountStatement: React.FC<AccountStatementProps> = ({
                                   >
                                     {doc.document_type_name}
                                   </span>
+                                </td>
+                                <td className="px-3 py-3.5 whitespace-nowrap">
+                                  {doc.seller_display_name ? (
+                                    <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 font-semibold inline-flex items-center gap-1">
+                                      <UserCheck className="w-3 h-3 text-emerald-400" />
+                                      <span>{doc.seller_display_name}</span>
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/20 font-semibold inline-flex items-center">
+                                      Sin Vendedor
+                                    </span>
+                                  )}
                                 </td>
                                 <td className="px-3 py-3.5 text-right font-bold text-white whitespace-nowrap">
                                   {formatMoney(doc.total_amount)}
@@ -977,7 +1001,7 @@ export const AccountStatement: React.FC<AccountStatementProps> = ({
                               {/* Fila Anidada Expandible (Detalle Jerárquico) */}
                               {isExpanded && (
                                 <tr className="bg-slate-950/80">
-                                  <td colSpan={9} className="p-0 border-y border-slate-800">
+                                  <td colSpan={10} className="p-0 border-y border-slate-800">
                                     <div className="py-3 px-6 pl-12 space-y-2.5">
                                       <div className="flex items-center justify-between text-xs">
                                         <div className="flex items-center space-x-2 font-bold text-slate-300">

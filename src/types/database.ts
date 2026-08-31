@@ -186,10 +186,14 @@ export interface DocumentLedgerView {
   document_human_ref: string;
   document_type_code: string;
   document_type_name: string;
+  document_seller_id?: number | null;
   reference_id: number;
   reference_human_ref: string;
   reference_type_code: string;
   reference_type_name: string;
+  reference_seller_id?: number | null;
+  reference_seller_code?: string;
+  reference_seller_name?: string;
   notes?: string;
   created_by: number;
   created_by_name: string;
