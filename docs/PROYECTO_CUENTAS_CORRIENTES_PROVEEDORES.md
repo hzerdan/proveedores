@@ -1,7 +1,8 @@
 # PROYECTO — SISTEMA DE CUENTAS CORRIENTES DE PROVEEDORES
-**Versión:** 1.0 (Validada contra código real)  
+**Versión:** 1.0  
 **Estado:** Documento Maestro Oficial del Sistema  
-**Última actualización:** 31 de Agosto de 2026
+**Validación:** Código + Migraciones reproducibles en STAGING + Tests  
+**Última actualización:** 1 de Septiembre de 2026
 
 ---
 
@@ -228,14 +229,78 @@ El sistema ofrece 4 modalidades de carga convergentes en el formulario canónico
 3. El móvil utiliza la cámara nativa (`capture="environment"`), previsualiza y sube el archivo directo al Storage mediante `rpc_submit_mobile_upload`.
 4. La PC detecta la subida en tiempo real y transfiere el archivo a la extracción por IA.
 
-### 7.2. Extracción Estructurada con IA
-- Edge Function `supabase/functions/extract-invoice` con OpenAI Structured Outputs (`json_schema`).
-- Extrae: Proveedor (CUIT, Razón Social, Fantasía), Documento (Tipo, Letra, POS, Número, Fechas, Moneda, Importe, CAE), `uncertain_fields`, `warnings` y `missing_fields`.
-- Registra la traza completa en `document_ai_extractions`.
-- Dispone de fallback inteligente en cliente para operar sin interrupciones.
+### 7.2. Soporte Real de Documentos PDF mediante OpenAI Files API
+A diferencia de los enfoques basados en OCR de texto plano que pierden la maquetación tabular de las facturas electrónicas, el sistema implementa procesamiento visual nativo de PDF mediante la **OpenAI Files API**:
+1. La Edge Function `extract-invoice` descarga el archivo desde el bucket `supplier-documents` de Supabase Storage.
+2. Si el MIME es `application/pdf`, sube el archivo a OpenAI (`/v1/files`, `purpose: "assistants"`).
+3. Invoca `chat/completions` con `model: "gpt-4o-mini"`, pasando el `file_id` remoto directamente en el array de contenido del mensaje y exigiendo el esquema estructurado estricto (`json_schema`).
+4. **Ciclo de vida efímero garantizado:** En el bloque `finally`, la Edge Function invoca `DELETE /v1/files/{id}` para eliminar de forma inmediata el archivo de los servidores de OpenAI, conservándolo únicamente en la infraestructura privada de Supabase.
 
-### 7.3. Alta Rápida de Proveedor (`rpc_quick_create_supplier`)
+### 7.3. Schema de Extracción v2.0 y Evidencias Fiscales
+El modelo de IA opera bajo la premisa estricta: **la IA extrae evidencias visuales, no toma decisiones contables ni calcula datos**.
+- **Preservación de formato textual:** Los números de punto de venta y comprobante se extraen como `string`, conservando ceros iniciales fiscales (`00008`, `00030893`). La conversión a entero para base de datos se realiza de forma determinística en código (`point_of_sale_num`, `document_number_num`).
+- **Fechas canónicas:** Extracción en formato canónico `YYYY-MM-DD` (`issue_date`, `printed_due_date`, `cae_due_date`).
+- **Condición y plazo de pago:** Se extraen como evidencias separadas el texto literal (`payment_condition_text`), los días calculables (`payment_term_days`) y la base de cómputo (`payment_term_basis: ISSUE_DATE | RECEIPT_DATE | DELIVERY_DATE | OTHER | UNKNOWN`).
+- **Listas de control del modelo:** El payload incluye `uncertain_fields` (campos con lectura dudosa), `warnings` y `missing_fields` (campos obligatorios ausentes en el documento impreso).
+
+### 7.4. Eliminación del Fallback Ficticio (Datos Cero Inventados)
+Se eliminó por completo cualquier mecanismo de mock o fallback que genere datos sintéticos ante fallas de red o indisponibilidad de la IA:
+- Si la Edge Function o el modelo fallan, la extracción se audita en la base de datos como `status = 'FAILED'`.
+- El sistema informa el error técnico real y abre el formulario canónico vacío para que el operador realice una carga manual pura.
+- Se garantiza que ningún documento contable se precargue jamás con datos inventados.
+
+### 7.5. Clasificación Autoritativa del Estado (`SUCCESS | PARTIAL | FAILED`)
+La Edge Function evalúa determinísticamente la calidad y completitud de la extracción antes de persistir en `document_ai_extractions`. El backend es la **única fuente autoritativa** de este estado:
+- **`SUCCESS` ("Datos completos para revisión"):**
+  - Procesamiento técnico finalizado con éxito.
+  - Todos los campos críticos requeridos según la matriz del tipo documental (`FACTURA`, `NOTA_DEBITO`, `NOTA_CREDITO`, `RECIBO`, `OTRO`) están presentes y son formalmente válidos.
+  - Ningún campo crítico aparece en `uncertain_fields` o `missing_fields`.
+  - No existen discrepancias aritméticas ni contradicciones de fechas.
+  - **Aclaración contable obligatoria:** `SUCCESS` certifica que el formulario está completamente precargado y superó las validaciones formales, pero **la confirmación humana continúa siendo obligatoria**.
+- **`PARTIAL` ("Extracción Parcial — Revisión humana obligatoria"):**
+  - Existe información aprovechable, pero uno o más campos críticos presentan fallas de validación, lectura incierta, inconsistencia aritmética o ausencia formal.
+  - Se detallan los motivos específicos al operador en un banner de advertencia (ej: CUIT inválido, número fuera de rango).
+- **`FAILED`:**
+  - Fallo técnico de infraestructura (error en OpenAI, archivo inaccesible en Storage) o comprobante ilegible sin al menos 2 datos mínimos aprovechables.
+
+### 7.6. Validaciones Determinísticas en Código
+Tanto la Edge Function (backend autoritativo) como el módulo espejo del frontend ejecutan validaciones determinísticas idénticas respaldadas por tests contractuales:
+1. **CUIT Emisor y Receptor:** Validación matemática estricta por algoritmo Módulo 11 de AFIP. Verificación de no colisión entre emisor y receptor.
+2. **Calendario Canónico Gregoriano:** Verificación estricta de días por mes, años bisiestos (ej: aceptación de `29/02/2024` y rechazo de `29/02/2025`) y rechazo de fechas inexistentes (`31/04`, `31/06`).
+3. **Rangos Fiscales:** Validación de punto de venta ($1 \le \text{POS} \le 99999$) y número de comprobante ($1 \le \text{Nro} \le 99999999$).
+4. **Reconciliación Aritmética:** Si están presentes Neto, IVA y Total, se verifica la igualdad $\text{Neto} + \text{IVA} = \text{Total} \pm 0.05$. Si no coinciden, se clasifica como `PARTIAL` sin alterar el total facial extraído.
+
+### 7.7. Cálculo y Resolución de Vencimientos
+Para evitar que la IA asuma vencimientos no impresos o invente plazos:
+1. La fecha de vencimiento impresa (`printed_due_date`) solo se adopta si figura explícita y textualmente en el comprobante.
+2. Si el comprobante estipula una condición a plazo basada en fecha de factura (`payment_term_basis = 'ISSUE_DATE'`), el sistema calcula determinísticamente la fecha:
+   $$\text{calculated\_due\_date} = \text{issue\_date} + \text{payment\_term\_days}$$
+3. Si existe discrepancia entre la fecha impresa y la calculada, se marca `due_date_inconsistency = true`.
+4. El operador en el formulario canónico selecciona explícitamente el origen del vencimiento:
+   - `PRINTED`: Adopta la fecha impresa.
+   - `CALCULATED`: Adopta el vencimiento calculado por plazo comercial.
+   - `MANUAL`: Permite ingresar una fecha arbitraria exigiendo justificación obligatoria.
+
+### 7.8. Confirmación Humana Obligatoria y Auditoría Diferencial (`confirmed_payload_diff`)
+1. **Regla de oro:** La IA nunca impacta el Ledger de forma autónoma.
+2. La creación del documento económico en `documents` y sus asientos en `account_movements` se ejecuta exclusivamente a través de la RPC `rpc_create_and_confirm_document`.
+3. La RPC valida en servidor que:
+   - La extracción pertenezca a la misma sesión y usuario autenticado.
+   - La extracción no haya sido confirmada previamente ni asociada a otro documento.
+   - La justificación manual de vencimiento esté presente si se modificó.
+4. **Auditoría Diferencial:** La RPC registra en `document_ai_extractions.confirmed_payload_diff` un objeto JSON con los valores exactos modificados por el operador respecto de lo propuesto por la IA (`field`, `extracted_value`, `confirmed_value`, `source`), permitiendo análisis estadístico de calibración del modelo.
+
+### 7.9. Preservación del Archivo Documental en `document_files`
+Todo comprobante procesado preserva su evidencia original:
+- Tabla `document_files`: Registra el `storage_path`, nombre de archivo, MIME type, tamaño, hash criptográfico y categoría documental (`INVOICE_PDF`, `INVOICE_IMAGE`).
+- El archivo se asocia inicialmente a la sesión de subida / extracción por IA, y al momento de la confirmación humana, la RPC enlaza formalmente `document_files.document_id = documents.id`, garantizando inmutabilidad y acceso seguro mediante URLs firmadas efímeras.
+
+### 7.10. Alta Rápida de Proveedor (`rpc_quick_create_supplier`)
 Si el comprobante pertenece a un emisor no registrado, el operador puede darlo de alta instantáneamente desde el modal con validación estricta de CUIT argentino sin abandonar el flujo de carga.
+
+### 7.11. Limitaciones Conocidas y Homologación de Fotografías Reales
+- **PDF Vectorial Digital:** Homologado y verificado con 100% de precisión en pruebas de laboratorio y QA.
+- **Fotografías Móviles:** La normalización de orientación EXIF (`exif-orientation`) y el pipeline de visión están plenamente operativos en código. Sin embargo, **la precisión de extracción sobre fotografías no se considera formalmente homologada** debido a la falta de una muestra representativa de facturas reales tomadas en diversas condiciones operativas (sombras, reflejos, arrugas y desenfoque). El modelo `gpt-4o-mini` se mantiene en esta etapa, y la clasificación determinística degrada de forma segura a `PARTIAL` cualquier fotografía con lectura borrosa o CUIT checksum erróneo.
 
 ---
 
@@ -295,11 +360,10 @@ Estructura del Sidebar (`src/config/navigation.ts`):
 
 ---
 
-## 11. Decisiones Arquitectónicas y Funcionales Pendientes `[PENDIENTE]`
+## 11. Decisiones Funcionales Pendientes de Revisión Humana `[PENDIENTE]`
 
-Las siguientes definiciones requieren revisión y acuerdo humano:
+Las siguientes definiciones de negocio requieren acuerdo humano previo a su implementación:
 
-1. **Consolidación de Migraciones Base:** Integrar formalmente la sentencia DDL de `account_movements` y el RPC `rpc_reverse_imputation` en las migraciones SQL reproducibles del repositorio.
-2. **Políticas de Cambio de Vendedor en Períodos Cerrados:** Definir si existirá un bloqueo temporal para modificar el vendedor de facturas saldadas de ejercicios anteriores.
-3. **Gestión de Retenciones Impositivas en Órdenes de Pago:** Ratificar si las retenciones (Ganancias, IIBB, SUSS) se cargan como comprobantes independientes de tipo `RETENCION` (`CREDIT`) o se incorporarán como campos analíticos en la cabecera de la OP.
-4. **Consolidación Multimoneda Analítica:** Definir si a futuro se agregará un convertidor a moneda base de reporte con fines informativos en el Aging, manteniendo la estricta segregación contable original.
+1. **Políticas de Cambio de Vendedor en Períodos Cerrados:** Definir si existirá un bloqueo temporal o autorización especial para modificar el vendedor de facturas saldadas de ejercicios contables anteriores.
+2. **Gestión de Retenciones Impositivas en Órdenes de Pago:** Ratificar si las retenciones sufridas (Ganancias, IIBB, SUSS) se continuarán cargando como comprobantes independientes de tipo `RETENCION` (`CREDIT`) o si se incorporarán como desgloses analíticos nativos en la cabecera de la OP.
+3. **Consolidación Multimoneda Analítica:** Definir si a futuro se agregará un convertidor informativo a moneda base de reporte en el Aging, manteniendo inalterada la estricta segregación contable original por moneda.
