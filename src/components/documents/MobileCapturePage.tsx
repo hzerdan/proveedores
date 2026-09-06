@@ -1,65 +1,88 @@
 import React, { useEffect, useState, useRef } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Camera, CheckCircle2, RotateCcw, Upload, AlertCircle, Building2, Loader2, Image as ImageIcon } from 'lucide-react';
+import { Camera, CheckCircle2, RotateCcw, RotateCw, Upload, AlertCircle, Building2, Loader2, Image as ImageIcon } from 'lucide-react';
 
 interface MobileCapturePageProps {
   captureToken: string;
 }
 
 /**
- * Resizes and compresses image on the client before upload (max 2048px, JPEG 0.85)
- * Prevents mobile browser memory crashes and ensures ultra-fast uploads
+ * Resizes, rotates and compresses image on the client before upload (max 2048px, JPEG 0.85)
+ * Prevents mobile browser memory crashes, fixes orientation and ensures ultra-fast uploads
  */
-function compressImage(file: File): Promise<{ blob: Blob; dataUrl: string }> {
+function renderProcessedImage(
+  img: HTMLImageElement,
+  rotationDegrees: number = 0
+): Promise<{ blob: Blob; dataUrl: string }> {
+  return new Promise((resolve, reject) => {
+    const MAX_DIM = 2048;
+    let width = img.width;
+    let height = img.height;
+
+    if (width > height) {
+      if (width > MAX_DIM) {
+        height = Math.round((height * MAX_DIM) / width);
+        width = MAX_DIM;
+      }
+    } else {
+      if (height > MAX_DIM) {
+        width = Math.round((width * MAX_DIM) / height);
+        height = MAX_DIM;
+      }
+    }
+
+    const normRotation = ((rotationDegrees % 360) + 360) % 360;
+    const isSwapped = normRotation === 90 || normRotation === 270;
+
+    const canvas = document.createElement('canvas');
+    canvas.width = isSwapped ? height : width;
+    canvas.height = isSwapped ? width : height;
+
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      reject(new Error('No se pudo inicializar el procesador de imágenes'));
+      return;
+    }
+
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate((normRotation * Math.PI) / 180);
+    ctx.drawImage(img, -width / 2, -height / 2, width, height);
+    ctx.restore();
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+
+    canvas.toBlob(
+      (blob) => {
+        if (blob) {
+          resolve({ blob, dataUrl });
+        } else {
+          reject(new Error('Error al comprimir la imagen'));
+        }
+      },
+      'image/jpeg',
+      0.85
+    );
+  });
+}
+
+function loadAndProcessImage(file: File, rotationDegrees: number = 0): Promise<{ blob: Blob; dataUrl: string; imgElement: HTMLImageElement }> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       const img = new Image();
-      img.onload = () => {
-        const MAX_DIM = 2048;
-        let width = img.width;
-        let height = img.height;
-
-        if (width > height) {
-          if (width > MAX_DIM) {
-            height = Math.round((height * MAX_DIM) / width);
-            width = MAX_DIM;
-          }
-        } else {
-          if (height > MAX_DIM) {
-            width = Math.round((width * MAX_DIM) / height);
-            height = MAX_DIM;
-          }
+      img.onload = async () => {
+        try {
+          const res = await renderProcessedImage(img, rotationDegrees);
+          resolve({ ...res, imgElement: img });
+        } catch (err) {
+          reject(err);
         }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('No se pudo inicializar el procesador de imágenes'));
-          return;
-        }
-
-        ctx.drawImage(img, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-
-        canvas.toBlob(
-          (blob) => {
-            if (blob) {
-              resolve({ blob, dataUrl });
-            } else {
-              reject(new Error('Error al comprimir la imagen'));
-            }
-          },
-          'image/jpeg',
-          0.85
-        );
       };
       img.onerror = () => reject(new Error('No se pudo decodificar la imagen'));
       img.src = e.target?.result as string;
     };
-    reader.onerror = () => reject(new Error('Error al leer el archivo de la cámara'));
+    reader.onerror = () => reject(new Error('Error al leer el archivo'));
     reader.readAsDataURL(file);
   });
 }
@@ -72,6 +95,8 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
   const [selectedBlob, setSelectedBlob] = useState<Blob | null>(null);
   const [fileName, setFileName] = useState<string>('comprobante.jpg');
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [rawImg, setRawImg] = useState<HTMLImageElement | null>(null);
+  const [currentRotation, setCurrentRotation] = useState<number>(0);
   const [processingImage, setProcessingImage] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [uploadSuccess, setUploadSuccess] = useState(false);
@@ -123,12 +148,31 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
 
     try {
       setFileName(file.name || 'comprobante.jpg');
-      const { blob, dataUrl } = await compressImage(file);
+      const { blob, dataUrl, imgElement } = await loadAndProcessImage(file, 0);
+      setRawImg(imgElement);
+      setCurrentRotation(0);
       setSelectedBlob(blob);
       setPreviewUrl(dataUrl);
     } catch (err: any) {
       console.error('Error processing captured photo:', err);
       setError(err.message || 'Error al procesar la foto');
+    } finally {
+      setProcessingImage(false);
+    }
+  };
+
+  const handleRotate = async () => {
+    if (!rawImg) return;
+    const nextRotation = (currentRotation + 90) % 360;
+    setCurrentRotation(nextRotation);
+    setProcessingImage(true);
+    try {
+      const { blob, dataUrl } = await renderProcessedImage(rawImg, nextRotation);
+      setSelectedBlob(blob);
+      setPreviewUrl(dataUrl);
+    } catch (err: any) {
+      console.error('Error rotating photo:', err);
+      setError('Error al rotar la foto');
     } finally {
       setProcessingImage(false);
     }
@@ -271,40 +315,54 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
               </div>
             )}
 
-            <div className="flex space-x-3 pt-2">
+            <div className="flex flex-col gap-2.5 pt-2">
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedBlob(null);
-                  setPreviewUrl(null);
-                  if (cameraInputRef.current) cameraInputRef.current.value = '';
-                  if (galleryInputRef.current) galleryInputRef.current.value = '';
-                }}
-                disabled={uploading}
-                className="flex-1 flex items-center justify-center space-x-1.5 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all disabled:opacity-50"
+                onClick={handleRotate}
+                disabled={uploading || processingImage}
+                className="w-full flex items-center justify-center space-x-2 py-2.5 rounded-2xl bg-sky-950/70 hover:bg-sky-900/80 border border-sky-500/40 text-sky-300 hover:text-sky-200 text-xs font-bold transition-all disabled:opacity-50 active:scale-98"
               >
-                <RotateCcw className="w-4 h-4" />
-                <span>Repetir Foto</span>
+                <RotateCw className="w-4 h-4 text-sky-400" />
+                <span>Rotar Foto 90° (Girar Vertical)</span>
               </button>
 
-              <button
-                type="button"
-                onClick={handleUpload}
-                disabled={uploading}
-                className="flex-1 flex items-center justify-center space-x-1.5 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-900/30 transition-all disabled:opacity-50"
-              >
-                {uploading ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Enviando...</span>
-                  </>
-                ) : (
-                  <>
-                    <Upload className="w-4 h-4" />
-                    <span>Confirmar y Enviar</span>
-                  </>
-                )}
-              </button>
+              <div className="flex space-x-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setRawImg(null);
+                    setSelectedBlob(null);
+                    setPreviewUrl(null);
+                    setCurrentRotation(0);
+                    if (cameraInputRef.current) cameraInputRef.current.value = '';
+                    if (galleryInputRef.current) galleryInputRef.current.value = '';
+                  }}
+                  disabled={uploading || processingImage}
+                  className="flex-1 flex items-center justify-center space-x-1.5 py-3 rounded-2xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-bold transition-all disabled:opacity-50"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Repetir</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleUpload}
+                  disabled={uploading || processingImage}
+                  className="flex-1 flex items-center justify-center space-x-1.5 py-3 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-900/30 transition-all disabled:opacity-50"
+                >
+                  {uploading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Enviando...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Upload className="w-4 h-4" />
+                      <span>Confirmar y Enviar</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         ) : (

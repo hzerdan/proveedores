@@ -6,7 +6,7 @@ import { X, Smartphone, Loader2, CheckCircle2, Copy, AlertCircle } from 'lucide-
 interface MobileCaptureQRModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onExtractionReady: (data: ExtractedInvoicePayload, fileId?: number) => void;
+  onExtractionReady: (data: ExtractedInvoicePayload, fileId?: number, extractionId?: number) => void;
 }
 
 export const MobileCaptureQRModal: React.FC<MobileCaptureQRModalProps> = ({
@@ -84,7 +84,7 @@ export const MobileCaptureQRModal: React.FC<MobileCaptureQRModalProps> = ({
 
               setStatus('DONE');
               setTimeout(() => {
-                onExtractionReady(extractionRes.data, extractionRes.file_id);
+                onExtractionReady(extractionRes.data, extractionRes.file_id, extractionRes.extraction_id);
                 onClose();
               }, 400);
             } catch (aiErr: any) {
@@ -93,15 +93,26 @@ export const MobileCaptureQRModal: React.FC<MobileCaptureQRModalProps> = ({
               setTimeout(() => {
                 onExtractionReady(
                   {
-                    supplier: { tax_id: null, legal_name: null, trade_name: null },
+                    schema_version: '2.0',
+                    status: 'FAILED',
+                    status_reasons: ['No se pudo completar la extracción automática por IA. Podés ingresar los datos manualmente.'],
+                    supplier: { tax_id: null, legal_name: null, trade_name: null, is_valid_cuit: false },
+                    receiver: { tax_id: null, name: null },
                     document: {
                       type_code: 'FACTURA',
                       letter: 'A',
                       point_of_sale: null,
                       document_number: null,
-                      issue_date: new Date().toISOString().split('T')[0],
-                      due_date: null,
+                      issue_date: null,
+                      printed_due_date: null,
+                      payment_condition_text: null,
+                      payment_term_days: null,
+                      payment_term_basis: null,
+                      calculated_due_date: null,
+                      due_date_inconsistency: false,
                       currency: 'ARS',
+                      net_amount: null,
+                      tax_amount: null,
                       total_amount: null,
                       cae: null,
                       cae_due_date: null,
@@ -291,7 +302,7 @@ export const MobileCaptureQRModal: React.FC<MobileCaptureQRModalProps> = ({
           {status === 'DONE' && (
             <div className="py-12 space-y-3">
               <CheckCircle2 className="w-10 h-10 text-emerald-400 mx-auto" />
-              <p className="text-xs font-bold text-white">¡Extracción completada!</p>
+              <p className="text-xs font-bold text-white">Datos listos para revisión</p>
             </div>
           )}
 

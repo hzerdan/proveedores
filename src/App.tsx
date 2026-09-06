@@ -41,6 +41,7 @@ function MainContent() {
   const [docFormSupplierId, setDocFormSupplierId] = useState<number | null>(null);
   const [docFormExtractedData, setDocFormExtractedData] = useState<ExtractedInvoicePayload | null>(null);
   const [docFormFileId, setDocFormFileId] = useState<number | null>(null);
+  const [docFormExtractionId, setDocFormExtractionId] = useState<number | null>(null);
   const [docFormIntakeSource, setDocFormIntakeSource] = useState<IntakeSource>('MANUAL');
 
   const [opModalOpen, setOpModalOpen] = useState(false);
@@ -79,6 +80,7 @@ function MainContent() {
   const handleStartManualForm = () => {
     setDocFormExtractedData(null);
     setDocFormFileId(null);
+    setDocFormExtractionId(null);
     setDocFormIntakeSource('MANUAL');
     setDocFormModalOpen(true);
   };
@@ -86,10 +88,12 @@ function MainContent() {
   const handleExtractionReady = (
     data: ExtractedInvoicePayload,
     fileId?: number,
-    source: string = 'IMAGE'
+    source: string = 'IMAGE',
+    extractionId?: number
   ) => {
     setDocFormExtractedData(data);
     setDocFormFileId(fileId || null);
+    setDocFormExtractionId(extractionId || null);
     setDocFormIntakeSource((source as IntakeSource) || 'IMAGE');
     setDocFormModalOpen(true);
   };
@@ -211,7 +215,7 @@ function MainContent() {
         <MobileCaptureQRModal
           isOpen={mobileQRModalOpen}
           onClose={() => setMobileQRModalOpen(false)}
-          onExtractionReady={(data, fileId) => handleExtractionReady(data, fileId, 'MOBILE_CAPTURE')}
+          onExtractionReady={(data, fileId, extId) => handleExtractionReady(data, fileId, 'MOBILE_CAPTURE', extId)}
         />
       )}
 
@@ -223,10 +227,12 @@ function MainContent() {
             setDocFormModalOpen(false);
             setDocFormExtractedData(null);
             setDocFormFileId(null);
+            setDocFormExtractionId(null);
           }}
           initialSupplierId={docFormSupplierId}
           initialData={docFormExtractedData}
           fileId={docFormFileId}
+          extractionId={docFormExtractionId}
           intakeSource={docFormIntakeSource}
           onSaved={() => {
             triggerRefresh();

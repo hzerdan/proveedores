@@ -13,11 +13,12 @@ import {
 } from 'lucide-react';
 
 interface DocumentIntakeModalProps {
+  supplierId?: number | null;
   isOpen: boolean;
   onClose: () => void;
   onSelectManual: () => void;
   onOpenMobileQR: () => void;
-  onExtractionReady: (data: ExtractedInvoicePayload, fileId?: number, intakeSource?: string) => void;
+  onExtractionReady: (data: ExtractedInvoicePayload, fileId?: number, intakeSource?: string, extractionId?: number) => void;
 }
 
 export const DocumentIntakeModal: React.FC<DocumentIntakeModalProps> = ({
@@ -86,10 +87,10 @@ export const DocumentIntakeModal: React.FC<DocumentIntakeModalProps> = ({
         fileId
       );
 
-      setStatusMessage('¡Extracción completada! Abriendo formulario de revisión...');
+      setStatusMessage('Lectura finalizada. Abriendo formulario para revisión...');
       setTimeout(() => {
         setProcessing(false);
-        onExtractionReady(extractionRes.data, fileId, currentIntakeSource);
+        onExtractionReady(extractionRes.data, fileId, currentIntakeSource, extractionRes.extraction_id);
         onClose();
       }, 500);
     } catch (err: any) {

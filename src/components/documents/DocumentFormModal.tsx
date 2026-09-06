@@ -5,6 +5,7 @@ import { DuplicateWarningModal } from './DuplicateWarningModal';
 import { SupplierQuickCreateModal } from '../suppliers/SupplierQuickCreateModal';
 import { ExtractedInvoicePayload } from '../../lib/aiExtractor';
 import { cleanCuit } from '../../lib/cuitValidator';
+import { parseCanonicalDate, toIsoDate } from '../../lib/formatters';
 import {
   X,
   FilePlus,
@@ -20,6 +21,7 @@ interface DocumentFormModalProps {
   initialSupplierId?: number | null;
   initialData?: ExtractedInvoicePayload | null;
   fileId?: number | null;
+  extractionId?: number | null;
   intakeSource?: IntakeSource;
   isOpen: boolean;
   onClose: () => void;
@@ -30,6 +32,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
   initialSupplierId,
   initialData,
   fileId,
+  extractionId,
   intakeSource = 'MANUAL',
   isOpen,
   onClose,
@@ -55,6 +58,11 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
   const [concept, setConcept] = useState('');
   const [notes, setNotes] = useState('');
 
+  // Due Date Decision States
+  const [effectiveExtractionId, setEffectiveExtractionId] = useState<number | null>(null);
+  const [dueDateSelectionSource, setDueDateSelectionSource] = useState<'PRINTED' | 'CALCULATED' | 'MANUAL'>('MANUAL');
+  const [manualReason, setManualReason] = useState<string>('');
+
   // UI States
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -64,6 +72,26 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
     taxId: string;
     name: string;
   } | null>(null);
+
+  // Resolve Effective Extraction ID (Prop or Query by fileId)
+  useEffect(() => {
+    if (extractionId) {
+      setEffectiveExtractionId(extractionId);
+    } else if (fileId) {
+      supabase
+        .from('document_ai_extractions')
+        .select('id')
+        .eq('file_id', fileId)
+        .order('id', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+        .then(({ data }) => {
+          if (data) setEffectiveExtractionId(data.id);
+        });
+    } else {
+      setEffectiveExtractionId(null);
+    }
+  }, [extractionId, fileId]);
 
   const fetchSuppliersAndTypes = async () => {
     const { data: sups } = await supabase
@@ -115,10 +143,6 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
         const sellers = data || [];
         setValidSellers(sellers);
 
-        // Reglas de negocio:
-        // 0 vendedores -> sellerId = '' (nullable)
-        // 1 vendedor -> auto-selección obligatoria
-        // >1 vendedores -> operador debe seleccionar explícitamente (sin heurística)
         if (sellers.length === 1) {
           setSellerId(sellers[0].seller_id);
         } else if (sellers.length > 1) {
@@ -146,10 +170,29 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
     if (initialData.document) {
       const doc = initialData.document;
       if (doc.letter) setLetter(doc.letter);
-      if (doc.point_of_sale) setPointOfSale(doc.point_of_sale.toString().padStart(4, '0'));
-      if (doc.document_number) setDocumentNumber(doc.document_number.toString());
-      if (doc.issue_date) setIssueDate(doc.issue_date);
-      if (doc.due_date) setDueDate(doc.due_date);
+      if (doc.point_of_sale) setPointOfSale(doc.point_of_sale.padStart(4, '0'));
+      if (doc.document_number) setDocumentNumber(doc.document_number);
+      
+      const isoIssue = doc.issue_date_iso || toIsoDate(parseCanonicalDate(doc.issue_date));
+      if (isoIssue) setIssueDate(isoIssue);
+
+      const isoPrintedDue = doc.printed_due_date_iso || toIsoDate(parseCanonicalDate(doc.printed_due_date));
+      const isoCalcDue = doc.calculated_due_date_iso || toIsoDate(parseCanonicalDate(doc.calculated_due_date));
+
+      if (isoPrintedDue) {
+        setDueDate(isoPrintedDue);
+        setDueDateSelectionSource('PRINTED');
+      } else if (isoCalcDue) {
+        setDueDate(isoCalcDue);
+        setDueDateSelectionSource('CALCULATED');
+      } else if (doc.due_date) {
+        const legacyIso = toIsoDate(parseCanonicalDate(doc.due_date));
+        if (legacyIso) {
+          setDueDate(legacyIso);
+          setDueDateSelectionSource('PRINTED');
+        }
+      }
+
       if (doc.currency) setCurrency(doc.currency);
       if (doc.total_amount) setTotalAmount(doc.total_amount.toString());
       if (doc.concept) setConcept(doc.concept);
@@ -225,6 +268,14 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
       return;
     }
 
+    // Validación estricta de motivo si el vencimiento es MANUAL
+    if (dueDateSelectionSource === 'MANUAL' && dueDate) {
+      if (!manualReason || manualReason.trim().length < 3) {
+        setError('La selección manual de la fecha de vencimiento exige indicar un motivo de al menos 3 caracteres.');
+        return;
+      }
+    }
+
     setLoading(true);
     setError(null);
 
@@ -234,7 +285,31 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
         throw new Error('El importe total debe ser un número mayor a 0.');
       }
 
-      // 1. Call RPC rpc_create_and_confirm_document
+      // Rastrear modificaciones respecto a la extracción de IA
+      const modifications: Record<string, { original: any; modified: any }> = {};
+      if (initialData?.document) {
+        const origDoc = initialData.document;
+        if (letter !== origDoc.letter) modifications.letter = { original: origDoc.letter, modified: letter };
+        if (pointOfSale !== (origDoc.point_of_sale || '')) modifications.point_of_sale = { original: origDoc.point_of_sale, modified: pointOfSale };
+        if (documentNumber !== (origDoc.document_number || '')) modifications.document_number = { original: origDoc.document_number, modified: documentNumber };
+        if (totalAmount !== (origDoc.total_amount?.toString() || '')) modifications.total_amount = { original: origDoc.total_amount, modified: totalAmount };
+        const origDue = origDoc.printed_due_date_iso || toIsoDate(parseCanonicalDate(origDoc.printed_due_date)) || origDoc.due_date;
+        if (dueDate !== (origDue || '')) modifications.due_date = { original: origDue, modified: dueDate };
+      }
+
+      const confirmedDiff = {
+        due_date_decision: {
+          selection_source: dueDateSelectionSource,
+          selected_due_date: dueDate || null,
+          printed_due_date: initialData?.document?.printed_due_date_iso || toIsoDate(parseCanonicalDate(initialData?.document?.printed_due_date)) || null,
+          calculated_due_date: initialData?.document?.calculated_due_date_iso || toIsoDate(parseCanonicalDate(initialData?.document?.calculated_due_date)) || null,
+          payment_condition_text: initialData?.document?.payment_condition_text || null,
+          manual_reason: dueDateSelectionSource === 'MANUAL' ? manualReason.trim() : null,
+        },
+        field_modifications: modifications,
+      };
+
+      // 1. Invocación atómica de rpc_create_and_confirm_document con auditoría server-side
       const { data: confirmRes, error: rpcErr } = await supabase.rpc(
         'rpc_create_and_confirm_document',
         {
@@ -252,6 +327,9 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
           p_concept: concept.trim() || null,
           p_notes: notes.trim() || null,
           p_override_reason: overrideReason || null,
+          p_ai_extraction_id: effectiveExtractionId,
+          p_file_id: fileId || null,
+          p_confirmed_payload_diff: confirmedDiff,
         }
       );
 
@@ -262,19 +340,6 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
         setDuplicateInfo(confirmRes);
         setLoading(false);
         return;
-      }
-
-      // If document was confirmed and fileId is associated, link it to document_files
-      if (confirmRes.success && confirmRes.document_id && fileId) {
-        await supabase
-          .from('document_files')
-          .update({ document_id: confirmRes.document_id })
-          .eq('id', fileId);
-
-        await supabase
-          .from('document_upload_sessions')
-          .update({ document_id: confirmRes.document_id, status: 'COMPLETED' })
-          .eq('file_id', fileId);
       }
 
       // Success
@@ -336,19 +401,65 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
               </div>
             )}
 
-            {/* Warnings Banner if AI had doubts */}
-            {initialData?.warnings && initialData.warnings.length > 0 && (
-              <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 space-y-1">
-                <div className="flex items-center space-x-2 font-bold">
-                  <AlertTriangle className="w-4 h-4 text-amber-400" />
-                  <span>Observaciones de la Extracción IA</span>
-                </div>
-                <ul className="list-disc list-inside pl-1 text-[11px] text-amber-200/90">
-                  {initialData.warnings.map((w, idx) => (
-                    <li key={idx}>{w}</li>
-                  ))}
-                </ul>
-              </div>
+            {/* AI Extraction Semantic Status Banner */}
+            {initialData && (
+              <>
+                {initialData.status === 'SUCCESS' && (
+                  <div className="p-3.5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 text-emerald-300 flex items-center space-x-2.5">
+                    <Check className="w-4 h-4 text-emerald-400 shrink-0" />
+                    <div>
+                      <span className="font-bold block">Datos completos para revisión</span>
+                      <span className="text-[11px] text-emerald-200/90">
+                        Se superaron las validaciones automáticas, pero la confirmación humana continúa siendo obligatoria.
+                      </span>
+                    </div>
+                  </div>
+                )}
+
+                {initialData.status === 'PARTIAL' && (
+                  <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-amber-300 space-y-2">
+                    <div className="flex items-center space-x-2 font-bold">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>Extracción Parcial — Revisión humana obligatoria</span>
+                    </div>
+                    {initialData.status_reasons && initialData.status_reasons.length > 0 && (
+                      <div className="space-y-1">
+                        <span className="text-[11px] font-semibold text-amber-300/90">Observaciones críticas detectadas:</span>
+                        <ul className="list-disc list-inside pl-1 text-[11px] text-amber-200/90 space-y-0.5">
+                          {initialData.status_reasons.map((r, idx) => (
+                            <li key={idx}>{r}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                    {initialData.warnings && initialData.warnings.length > 0 && (
+                      <ul className="list-disc list-inside pl-1 text-[11px] text-amber-200/80 space-y-0.5">
+                        {initialData.warnings.map((w, idx) => (
+                          <li key={idx}>{w}</li>
+                        ))}
+                      </ul>
+                    )}
+                    {initialData.missing_fields && initialData.missing_fields.length > 0 && (
+                      <div className="text-[11px] text-amber-300/80 pt-0.5">
+                        <span className="font-semibold">Campos no detectados: </span>
+                        <span className="font-mono text-amber-200">{initialData.missing_fields.join(', ')}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {initialData.status === 'FAILED' && (
+                  <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-300 space-y-1">
+                    <div className="flex items-center space-x-2 font-bold">
+                      <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                      <span>Extracción Automática No Disponible</span>
+                    </div>
+                    <p className="text-[11px] text-rose-200/90">
+                      No se obtuvo información mínima utilizable. Ingresá los datos del comprobante manualmente.
+                    </p>
+                  </div>
+                )}
+              </>
             )}
 
             {/* Unrecognized Supplier Suggestion Banner */}
@@ -578,6 +689,99 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
               </div>
             </div>
 
+            {/* Due Date Decision Card if inconsistency exists or if both printed & calculated dates are present */}
+            {(initialData?.document?.due_date_inconsistency || (initialData?.document?.printed_due_date && initialData?.document?.calculated_due_date)) && (
+              <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/50 space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center space-x-2 text-amber-300 font-bold text-xs">
+                    <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <span>Resolución de Fecha de Vencimiento</span>
+                  </div>
+                  <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300">
+                    Decisión del Operador
+                  </span>
+                </div>
+
+                <div className="text-[11px] text-amber-200/90 space-y-1">
+                  {initialData?.document?.printed_due_date && (
+                    <div>• <strong>Fecha impresa en factura:</strong> {initialData.document.printed_due_date}</div>
+                  )}
+                  {initialData?.document?.calculated_due_date && (
+                    <div>• <strong>Fecha calculada según condición ({initialData.document.payment_condition_text || `${initialData.document.payment_term_days} días`}):</strong> {initialData.document.calculated_due_date}</div>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2 pt-1">
+                  {initialData?.document?.printed_due_date && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDueDateSelectionSource('PRINTED');
+                        const iso = initialData.document.printed_due_date_iso || toIsoDate(parseCanonicalDate(initialData.document.printed_due_date)) || '';
+                        setDueDate(iso);
+                        setManualReason('');
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                        dueDateSelectionSource === 'PRINTED'
+                          ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md shadow-amber-500/20'
+                          : 'bg-slate-800 text-amber-300 border-amber-500/30 hover:bg-slate-700'
+                      }`}
+                    >
+                      Usar Fecha Impresa ({initialData.document.printed_due_date})
+                    </button>
+                  )}
+
+                  {initialData?.document?.calculated_due_date && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDueDateSelectionSource('CALCULATED');
+                        const iso = initialData.document.calculated_due_date_iso || toIsoDate(parseCanonicalDate(initialData.document.calculated_due_date)) || '';
+                        setDueDate(iso);
+                        setManualReason('');
+                      }}
+                      className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                        dueDateSelectionSource === 'CALCULATED'
+                          ? 'bg-sky-500 text-slate-950 border-sky-400 shadow-md shadow-sky-500/20'
+                          : 'bg-slate-800 text-sky-300 border-sky-500/30 hover:bg-slate-700'
+                      }`}
+                    >
+                      Usar Fecha Calculada ({initialData.document.calculated_due_date})
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDueDateSelectionSource('MANUAL');
+                    }}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition-all ${
+                      dueDateSelectionSource === 'MANUAL'
+                        ? 'bg-purple-600 text-white border-purple-400 shadow-md shadow-purple-500/20'
+                        : 'bg-slate-800 text-purple-300 border-purple-500/30 hover:bg-slate-700'
+                    }`}
+                  >
+                    Ingreso Manual
+                  </button>
+                </div>
+
+                {dueDateSelectionSource === 'MANUAL' && (
+                  <div className="pt-1.5">
+                    <label className="block text-[10px] font-semibold uppercase tracking-wider text-purple-300 mb-1">
+                      Motivo de la asignación manual * (Mínimo 3 caracteres)
+                    </label>
+                    <input
+                      type="text"
+                      value={manualReason}
+                      onChange={(e) => setManualReason(e.target.value)}
+                      placeholder="Ej: Modificado según acuerdo telefónico con el proveedor..."
+                      className="w-full bg-slate-900 border border-purple-500/50 rounded-xl px-3 py-1.5 text-white text-xs font-medium focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Dates & Currency & Total Amount */}
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div>
@@ -594,13 +798,23 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
-                  Fecha Vto. Pago
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
+                    Fecha Vto. Pago
+                  </label>
+                  {dueDateSelectionSource && (
+                    <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-700/60 text-slate-300">
+                      {dueDateSelectionSource}
+                    </span>
+                  )}
+                </div>
                 <input
                   type="date"
                   value={dueDate}
-                  onChange={(e) => setDueDate(e.target.value)}
+                  onChange={(e) => {
+                    setDueDate(e.target.value);
+                    setDueDateSelectionSource('MANUAL');
+                  }}
                   className={`w-full bg-slate-800 border rounded-xl px-3 py-2 text-white font-mono ${
                     isFieldUncertain('document.due_date') ? 'border-amber-500/80' : 'border-slate-700'
                   }`}
