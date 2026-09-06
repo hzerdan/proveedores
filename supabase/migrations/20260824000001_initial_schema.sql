@@ -155,7 +155,29 @@ CREATE TABLE IF NOT EXISTS duplicate_override_logs (
 CREATE INDEX idx_duplicate_override_doc ON duplicate_override_logs(document_id);
 CREATE INDEX idx_duplicate_override_matched ON duplicate_override_logs(matched_document_id);
 
--- 8. Aplicaciones de Documentos (M:N)
+-- 8. Ledger de Movimientos de Cuenta Corriente (Source of Truth Económico)
+CREATE TABLE IF NOT EXISTS account_movements (
+    id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    supplier_id bigint NOT NULL REFERENCES suppliers(id) ON DELETE RESTRICT,
+    document_id bigint NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+    reference_id bigint NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,
+    line_number smallint NOT NULL DEFAULT 1,
+    movement_type text NOT NULL CHECK (movement_type IN ('ORIGIN', 'IMPUTATION', 'REMAINDER', 'APL_TRANSFER', 'REVERSAL', 'DESIMPUTATION')),
+    movement_date date NOT NULL,
+    currency varchar(3) NOT NULL DEFAULT 'ARS',
+    amount numeric(15,2) NOT NULL,
+    notes text,
+    created_by bigint NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
+    created_at timestamptz NOT NULL DEFAULT clock_timestamp()
+);
+
+CREATE INDEX IF NOT EXISTS idx_mov_supplier ON account_movements(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_mov_reference ON account_movements(reference_id);
+CREATE INDEX IF NOT EXISTS idx_mov_document ON account_movements(document_id);
+CREATE INDEX IF NOT EXISTS idx_mov_date ON account_movements(movement_date);
+CREATE INDEX IF NOT EXISTS idx_account_movements_ref_curr ON account_movements(reference_id, currency);
+
+-- 9. Aplicaciones de Documentos (M:N)
 CREATE TABLE IF NOT EXISTS document_applications (
     id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     source_document_id bigint NOT NULL REFERENCES documents(id) ON DELETE RESTRICT,

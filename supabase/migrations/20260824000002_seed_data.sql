@@ -18,7 +18,8 @@ INSERT INTO document_types (
     ('AJUSTE_DEBITO', 'Ajuste de Débito', 'Ajuste operativo que incrementa la deuda con el proveedor.', 'DEBIT', true, false, true, false, false),
     ('AJUSTE_CREDITO', 'Ajuste de Crédito / Reversión', 'Ajuste compensatorio que reduce deuda o revierte un débito erróneo.', 'CREDIT', true, true, false, false, false),
     ('PROFORMA', 'Factura Proforma / Presupuesto', 'Documento informativo previo sin impacto económico.', 'NEUTRAL', false, false, false, false, false),
-    ('DESIMPUTACION', 'Documento de Desimputación', 'Documento de control interno para revertir aplicaciones sin alterar saldo global.', 'NEUTRAL', false, false, false, false, true)
+    ('DESIMPUTACION', 'Documento de Desimputación', 'Documento de control interno para revertir aplicaciones sin alterar saldo global.', 'NEUTRAL', false, false, false, false, true),
+    ('APL', 'Aplicación de Saldos', 'Documento de aplicación para transferir saldos entre referencias.', 'NEUTRAL', false, false, false, false, false)
 ON CONFLICT (code) DO NOTHING;
 
 -- 2. Catálogo de Roles

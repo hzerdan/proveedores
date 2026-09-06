@@ -18,6 +18,7 @@ ALTER TABLE document_applications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE application_reversals ENABLE ROW LEVEL SECURITY;
 ALTER TABLE document_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE document_ai_extractions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE account_movements ENABLE ROW LEVEL SECURITY;
 
 -- 1. Políticas para PROFILES
 CREATE POLICY "profiles_select_authenticated" ON profiles
@@ -120,3 +121,17 @@ CREATE POLICY "ai_extractions_insert" ON document_ai_extractions
 
 CREATE POLICY "ai_extractions_update" ON document_ai_extractions
     FOR UPDATE TO authenticated USING (has_permission('documents.ai_review'));
+
+-- 10. Políticas para ACCOUNT_MOVEMENTS (Ledger Inmutable)
+CREATE POLICY "account_movements_select" ON account_movements
+    FOR SELECT TO authenticated USING (true);
+
+CREATE POLICY "account_movements_select_anon" ON account_movements
+    FOR SELECT TO anon USING (true);
+
+CREATE POLICY "account_movements_insert" ON account_movements
+    FOR INSERT TO authenticated WITH CHECK (true);
+
+CREATE POLICY "account_movements_insert_anon" ON account_movements
+    FOR INSERT TO anon WITH CHECK (true);
+
