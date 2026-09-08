@@ -19,6 +19,8 @@ export interface ExtractedReceiver {
   name: string | null;
 }
 
+export type DueDateSource = 'EXPLICIT_PRINTED' | 'CALCULATED_FROM_PAYMENT_TERMS' | 'MANUAL_REQUIRED';
+
 export interface ExtractedDocument {
   type_code: 'FACTURA' | 'NOTA_DEBITO' | 'NOTA_CREDITO' | 'RECIBO' | 'OTRO' | null;
   letter: 'A' | 'B' | 'C' | 'M' | null;
@@ -26,11 +28,20 @@ export interface ExtractedDocument {
   point_of_sale_num?: number | null; // Valor numérico para PostgreSQL
   document_number: string | null;    // Preserva ceros a la izquierda (ej: '00030893')
   document_number_num?: number | null;// Valor numérico para PostgreSQL
+  
+  // Fechas y Plazos Canónicos v2.1
+  invoice_date?: string | null;         // Formato ISO YYYY-MM-DD
+  due_date?: string | null;             // Formato ISO YYYY-MM-DD (vencimiento comercial resuelto)
+  payment_terms_text?: string | null;   // Texto de condición comercial (ej: '30 días fecha factura')
+  payment_terms_days?: number | null;   // Plazo en días (ej: 30)
+  cae_expiration_date?: string | null;  // Formato ISO YYYY-MM-DD (fecha fiscal regulatoria AFIP)
+  due_date_source?: DueDateSource | null;// Origen del vencimiento comercial determinado
+
+  // Compatibilidad con campos previos
   issue_date: string | null;         // Formato canónico DD/MM/YYYY
   issue_date_iso?: string | null;    // Formato técnico YYYY-MM-DD
-  printed_due_date: string | null;   // Formato canónico DD/MM/YYYY
+  printed_due_date: string | null;   // Formato canónico DD/MM/YYYY (comercial, nunca CAE)
   printed_due_date_iso?: string | null;
-  due_date?: string | null;          // Compatibilidad con payloads históricos v1.0
   payment_condition_text: string | null;
   payment_term_days: number | null;
   payment_term_basis: 'ISSUE_DATE' | 'RECEIPT_DATE' | 'DELIVERY_DATE' | 'OTHER' | 'UNKNOWN' | null;
@@ -260,13 +271,20 @@ export function evaluateExtractionStatus(payload: {
 export function computeDeterministicDueDate(
   issueDateStr: string | null,
   termDays: number | null,
-  termBasis: string | null
+  termBasis: string | null,
+  conditionText?: string | null
 ): { human: string | null; iso: string | null } {
   if (!issueDateStr || termDays === null || termDays === undefined || termDays < 0) {
     return { human: null, iso: null };
   }
-  // Solo se calcula inequívocamente si la base es explícitamente fecha de emisión / factura
-  if (termBasis !== 'ISSUE_DATE') {
+
+  // Se calcula si la base es explícitamente ISSUE_DATE o si el texto comercial denota fecha factura / días
+  const isIssueDateBasis =
+    termBasis === 'ISSUE_DATE' ||
+    (conditionText && /fecha\s*factura|f\.?f\.?|emisi[oó]n|d[ií]as/i.test(conditionText)) ||
+    (!termBasis && termDays > 0);
+
+  if (!isIssueDateBasis) {
     return { human: null, iso: null };
   }
 
@@ -290,7 +308,7 @@ export function computeDeterministicDueDate(
 
 /**
  * Normalizador determinístico: sanea evidencias, calcula fechas, valida importes y CUIT.
- * Compatible tanto con payloads v2.0 como con el formato histórico v1.0.
+ * Aplica precedencia estricta para determinar due_date y rechaza Vencimiento CAE como vencimiento comercial.
  */
 export function reconcileInvoiceEvidence(raw: any): ExtractedInvoicePayload {
   const warnings: string[] = Array.isArray(raw?.warnings) ? [...raw.warnings] : [];
@@ -298,38 +316,49 @@ export function reconcileInvoiceEvidence(raw: any): ExtractedInvoicePayload {
   const missingFields: string[] = Array.isArray(raw?.missing_fields) ? [...raw.missing_fields] : [];
 
   // 1. Detección de versión de esquema y compatibilidad histórica
-  const isV2 = raw?.schema_version === '2.0' || raw?.document?.printed_due_date !== undefined;
+  const isV2 = raw?.schema_version === '2.0' || raw?.document?.printed_due_date !== undefined || raw?.document?.invoice_date !== undefined;
   const schemaVersion = isV2 ? '2.0' : '1.0';
 
   // 2. Extracción y normalización de Fechas
-  const rawIssue = raw?.document?.issue_date || null;
+  const rawIssue = raw?.document?.invoice_date || raw?.document?.issue_date || null;
   const parsedIssue = parseCanonicalDate(rawIssue);
   const issueHuman = toHumanDate(parsedIssue);
   const issueIso = toIsoDate(parsedIssue);
 
-  // Vencimiento impreso (en v1 se leía como due_date)
-  const rawPrintedDue = isV2 ? (raw?.document?.printed_due_date || null) : (raw?.document?.due_date || null);
-  const parsedPrintedDue = parseCanonicalDate(rawPrintedDue);
-  const printedDueHuman = toHumanDate(parsedPrintedDue);
-  const printedDueIso = toIsoDate(parsedPrintedDue);
-
-  // CAE Vencimiento
-  const rawCaeDue = raw?.document?.cae_due_date || null;
+  // CAE Vencimiento (Dato puramente fiscal de AFIP)
+  const rawCaeDue = raw?.document?.cae_expiration_date || raw?.document?.cae_due_date || null;
   const parsedCaeDue = parseCanonicalDate(rawCaeDue);
   const caeDueHuman = toHumanDate(parsedCaeDue);
   const caeDueIso = toIsoDate(parsedCaeDue);
 
-  // 3. Condición de Pago y Cálculo Determinístico de Vencimiento
-  const conditionText = raw?.document?.payment_condition_text || null;
-  let termDays: number | null = raw?.document?.payment_term_days !== undefined ? raw.document.payment_term_days : null;
+  // Vencimiento impreso (en v1 se leía como due_date)
+  const rawPrintedDue = raw?.document?.printed_due_date || (!isV2 ? raw?.document?.due_date : null);
+  const parsedPrintedDue = parseCanonicalDate(rawPrintedDue);
+  let printedDueHuman = toHumanDate(parsedPrintedDue);
+  let printedDueIso = toIsoDate(parsedPrintedDue);
+
+  // 3. Validación determinística: Rechazar Vencimiento CAE como vencimiento comercial
+  if (printedDueIso && caeDueIso && printedDueIso === caeDueIso) {
+    warnings.push(
+      `La fecha ${printedDueHuman} coincide con el Vencimiento CAE fiscal (AFIP) y fue descartada como fecha de vencimiento comercial de pago.`
+    );
+    printedDueHuman = null;
+    printedDueIso = null;
+  }
+
+  // 4. Condición de Pago y Cálculo Determinístico de Vencimiento
+  const conditionText = raw?.document?.payment_terms_text || raw?.document?.payment_condition_text || null;
+  let termDays: number | null = raw?.document?.payment_terms_days !== undefined
+    ? raw.document.payment_terms_days
+    : (raw?.document?.payment_term_days !== undefined ? raw.document.payment_term_days : null);
   let termBasis: any = raw?.document?.payment_term_basis || null;
 
-  // Si la IA no extrajo los días pero el texto contiene indicio numérico claro (ej. "30 días", "7 dias FF")
+  // Si la IA no extrajo los días pero el texto contiene indicio numérico claro (ej. "30 días fecha factura", "7 dias FF")
   if (termDays === null && conditionText) {
     const match = conditionText.match(/(\d+)\s*d[ií]as/i);
     if (match) {
       termDays = parseInt(match[1], 10);
-      if (/FF|factura/i.test(conditionText)) {
+      if (/factura|f\.?f\.?|emisi[oó]n/i.test(conditionText)) {
         termBasis = 'ISSUE_DATE';
       } else {
         termBasis = 'UNKNOWN';
@@ -337,9 +366,39 @@ export function reconcileInvoiceEvidence(raw: any): ExtractedInvoicePayload {
     }
   }
 
-  const { human: calcDueHuman, iso: calcDueIso } = computeDeterministicDueDate(issueHuman, termDays, termBasis);
+  // Si la condición dice "fecha factura" o similar, la base es indiscutiblemente ISSUE_DATE
+  if (conditionText && /fecha\s*factura|f\.?f\.?|emisi[oó]n/i.test(conditionText)) {
+    termBasis = 'ISSUE_DATE';
+  }
 
-  // 4. Comparación y Detección de Discrepancias de Vencimiento
+  const { human: calcDueHuman, iso: calcDueIso } = computeDeterministicDueDate(issueIso || issueHuman, termDays, termBasis, conditionText);
+
+  // 5. Precedencia para determinar due_date comercial y due_date_source:
+  //    1. Vencimiento comercial explícitamente impreso (no CAE).
+  //    2. Cálculo desde una condición comercial inequívoca (ej: 30 días fecha factura).
+  //    3. Ingreso manual cuando no pueda determinarse.
+  let finalDueDateIso: string | null;
+  let dueDateSource: DueDateSource;
+
+  if (printedDueIso) {
+    finalDueDateIso = printedDueIso;
+    dueDateSource = 'EXPLICIT_PRINTED';
+  } else if (calcDueIso) {
+    finalDueDateIso = calcDueIso;
+    dueDateSource = 'CALCULATED_FROM_PAYMENT_TERMS';
+  } else {
+    finalDueDateIso = null;
+    dueDateSource = 'MANUAL_REQUIRED';
+  }
+
+  // Regla de seguridad absoluta: Nunca usar cae_expiration_date como due_date
+  if (finalDueDateIso && caeDueIso && finalDueDateIso === caeDueIso && dueDateSource !== 'CALCULATED_FROM_PAYMENT_TERMS') {
+    warnings.push('Se bloqueó el uso del Vencimiento CAE fiscal como vencimiento comercial.');
+    finalDueDateIso = null;
+    dueDateSource = 'MANUAL_REQUIRED';
+  }
+
+  // 6. Comparación y Detección de Discrepancias de Vencimiento
   let dueDateInconsistency = false;
   if (printedDueHuman && calcDueHuman && printedDueHuman !== calcDueHuman) {
     dueDateInconsistency = true;
@@ -349,7 +408,7 @@ export function reconcileInvoiceEvidence(raw: any): ExtractedInvoicePayload {
     );
   }
 
-  // 5. Normalización de Punto de Venta y Número preservando ceros iniciales
+  // 7. Normalización de Punto de Venta y Número preservando ceros iniciales
   const rawPos = raw?.document?.point_of_sale !== undefined && raw?.document?.point_of_sale !== null
     ? String(raw.document.point_of_sale).trim()
     : null;
@@ -360,7 +419,15 @@ export function reconcileInvoiceEvidence(raw: any): ExtractedInvoicePayload {
   const posNum = rawPos ? parseInt(rawPos, 10) : null;
   const docNum = rawNum ? parseInt(rawNum, 10) : null;
 
-  // 6. Normalización y Reconciliación Aritmética de Importes
+  // Normalización estándar AFIP de strings para punto de venta (4 dígitos) y número (8 dígitos)
+  const normalizedPosStr = posNum !== null && !isNaN(posNum) && posNum <= 99999
+    ? posNum.toString().padStart(4, '0')
+    : rawPos;
+  const normalizedDocNumStr = docNum !== null && !isNaN(docNum) && docNum <= 99999999
+    ? docNum.toString().padStart(8, '0')
+    : rawNum;
+
+  // 8. Normalización y Reconciliación Aritmética de Importes
   const netAmount = raw?.document?.net_amount !== undefined && raw?.document?.net_amount !== null
     ? parseFloat(raw.document.net_amount)
     : (raw?.document?.subtotal_amount ? parseFloat(raw.document.subtotal_amount) : null);
@@ -376,14 +443,13 @@ export function reconcileInvoiceEvidence(raw: any): ExtractedInvoicePayload {
     const expected = Math.round((netAmount + taxAmount) * 100) / 100;
     if (Math.abs(expected - totalAmount) > 0.05) {
       arithmeticBalanced = false;
-      // Advertencia orientativa sin marcar automáticamente el total como erróneo
       warnings.push(
         `Subtotal ($${netAmount.toFixed(2)}) + IVA ($${taxAmount.toFixed(2)}) suma $${expected.toFixed(2)}, difiriendo del Total ($${totalAmount.toFixed(2)}). Podría corresponder a percepciones u otros conceptos no desglosados.`
       );
     }
   }
 
-  // 7. Normalización y Validación CUIT Módulo 11 del Emisor
+  // 9. Normalización y Validación CUIT Módulo 11 del Emisor
   let supplierTaxId = raw?.supplier?.tax_id || null;
   let isValidSupplierCuit = false;
   if (supplierTaxId) {
@@ -414,10 +480,20 @@ export function reconcileInvoiceEvidence(raw: any): ExtractedInvoicePayload {
     document: {
       type_code: (raw?.document?.type_code || 'FACTURA') as any,
       letter: (raw?.document?.letter || 'A') as any,
-      point_of_sale: rawPos,
+      point_of_sale: normalizedPosStr,
       point_of_sale_num: posNum,
-      document_number: rawNum,
+      document_number: normalizedDocNumStr,
       document_number_num: docNum,
+
+      // Contrato Canónico v2.1
+      invoice_date: issueIso,
+      due_date: finalDueDateIso,
+      payment_terms_text: conditionText,
+      payment_terms_days: termDays,
+      cae_expiration_date: caeDueIso,
+      due_date_source: dueDateSource,
+
+      // Compatibilidad con campos existentes
       issue_date: issueHuman,
       issue_date_iso: issueIso,
       printed_due_date: printedDueHuman,
@@ -552,6 +628,12 @@ export async function extractInvoiceFromStorage(
           point_of_sale_num: null,
           document_number: null,
           document_number_num: null,
+          invoice_date: null,
+          due_date: null,
+          payment_terms_text: null,
+          payment_terms_days: null,
+          cae_expiration_date: null,
+          due_date_source: 'MANUAL_REQUIRED',
           issue_date: null,
           issue_date_iso: null,
           printed_due_date: null,

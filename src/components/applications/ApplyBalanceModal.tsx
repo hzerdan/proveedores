@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
-import { DocumentSummaryView } from '../../types/database';
+import { DocumentSummaryView, DocumentNumberingSeries, NumberingMode, DocumentType } from '../../types/database';
 import { formatDate, formatMoney } from '../../lib/formatters';
+import { SeriesSelector } from '../documents/SeriesSelector';
 import { X, Layers, Check, AlertCircle } from 'lucide-react';
 
 interface ApplyBalanceModalProps {
@@ -22,10 +23,28 @@ export const ApplyBalanceModal: React.FC<ApplyBalanceModalProps> = ({
   onClose,
   onSaved,
 }) => {
+  const [aplDocType, setAplDocType] = useState<DocumentType | null>(null);
+  const [selectedSeries, setSelectedSeries] = useState<DocumentNumberingSeries | null>(null);
+  const [numberingMode, setNumberingMode] = useState<NumberingMode>('INTERNAL_SEQUENCE');
+  const [seriesList, setSeriesList] = useState<DocumentNumberingSeries[]>([]);
   const [targetItems, setTargetItems] = useState<TargetItem[]>([]);
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    supabase
+      .from('document_types')
+      .select('*')
+      .eq('code', 'APL')
+      .single()
+      .then(({ data }) => {
+        if (data) {
+          setAplDocType(data as DocumentType);
+          setNumberingMode((data.numbering_mode as NumberingMode) || 'INTERNAL_SEQUENCE');
+        }
+      });
+  }, []);
 
   useEffect(() => {
     if (!sourceDoc || !isOpen) return;
@@ -109,6 +128,18 @@ export const ApplyBalanceModal: React.FC<ApplyBalanceModalProps> = ({
       return;
     }
 
+    // Numbering series validation
+    if (numberingMode === 'INTERNAL_SEQUENCE') {
+      if (seriesList.length === 0) {
+        setError('Bloqueado: No existen series activas configuradas para comprobantes APL. Configure una serie antes de aplicar.');
+        return;
+      }
+      if (seriesList.length > 1 && !selectedSeries) {
+        setError('Debe seleccionar obligatoriamente una serie activa para la aplicación APL.');
+        return;
+      }
+    }
+
     setLoading(true);
 
     try {
@@ -116,6 +147,7 @@ export const ApplyBalanceModal: React.FC<ApplyBalanceModalProps> = ({
         p_source_document_id: sourceDoc.document_id,
         p_target_applications: validApplications,
         p_notes: notes.trim() || null,
+        p_numbering_series_id: numberingMode === 'INTERNAL_SEQUENCE' ? (selectedSeries?.id || null) : null,
       });
 
       if (rpcErr) throw rpcErr;
@@ -246,6 +278,19 @@ export const ApplyBalanceModal: React.FC<ApplyBalanceModalProps> = ({
               ))}
             </div>
           )}
+
+          {/* Series Selection for APL */}
+          <div className="space-y-2">
+            <SeriesSelector
+              documentTypeId={aplDocType?.id || null}
+              selectedSeriesId={selectedSeries?.id || null}
+              onSelectSeries={setSelectedSeries}
+              onModeLoaded={(mode, sList) => {
+                setNumberingMode(mode);
+                setSeriesList(sList);
+              }}
+            />
+          </div>
 
           <div>
             <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">

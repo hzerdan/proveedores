@@ -2,25 +2,15 @@ import React, { createContext, useContext, useEffect, useState, useCallback } fr
 import { supabase } from '../lib/supabase';
 import { Profile } from '../types/database';
 
-export interface AvailableProfile {
-  id: number;
-  first_name: string;
-  last_name: string;
-  email: string;
-  role_code: string;
-}
-
 interface AuthContextType {
   user: any | null;
   profile: Profile | null;
   roles: string[];
   permissions: string[];
-  availableProfiles: AvailableProfile[];
   isLoading: boolean;
   hasPermission: (permissionCode: string) => boolean;
   signIn: (email: string, password?: string) => Promise<{ error?: string }>;
   signOut: () => Promise<void>;
-  switchProfile: (profileId: number) => Promise<void>;
   refreshAuth: () => Promise<void>;
 }
 
@@ -31,48 +21,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [profile, setProfile] = useState<Profile | null>(null);
   const [roles, setRoles] = useState<string[]>([]);
   const [permissions, setPermissions] = useState<string[]>([]);
-  const [availableProfiles, setAvailableProfiles] = useState<AvailableProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-
-  // Cargar lista de perfiles disponibles para selector rápido
-  const loadAvailableProfiles = async () => {
-    try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select(`
-          id,
-          first_name,
-          last_name,
-          email,
-          user_roles (
-            roles (code)
-          )
-        `)
-        .eq('is_active', true)
-        .order('id', { ascending: true });
-
-      if (!error && data) {
-        const formatted: AvailableProfile[] = data.map((p: any) => ({
-          id: p.id,
-          first_name: p.first_name,
-          last_name: p.last_name,
-          email: p.email,
-          role_code: p.user_roles?.[0]?.roles?.code || 'OPERADOR',
-        }));
-        setAvailableProfiles(formatted);
-      }
-    } catch (err) {
-      console.error('Error loading available profiles:', err);
-    }
-  };
 
   const loadUserRolesAndPermissions = async (profileId: number) => {
     try {
       // 1. Obtener roles asignados
-      const { data: userRolesData } = await supabase
+      const { data: userRolesData, error: rolesError } = await supabase
         .from('user_roles')
         .select('role_id, roles(code, name)')
         .eq('user_id', profileId);
+
+      if (rolesError) throw rolesError;
 
       const roleCodes = (userRolesData || []).map((ur: any) => ur.roles?.code).filter(Boolean);
       setRoles(roleCodes.length > 0 ? roleCodes : ['OPERADOR']);
@@ -80,10 +39,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       // 2. Obtener permisos de esos roles
       const roleIds = (userRolesData || []).map((ur: any) => ur.role_id);
       if (roleIds.length > 0) {
-        const { data: rolePermsData } = await supabase
+        const { data: rolePermsData, error: permsError } = await supabase
           .from('role_permissions')
           .select('permissions(code)')
           .in('role_id', roleIds);
+
+        if (permsError) throw permsError;
 
         const permCodes = (rolePermsData || []).map((rp: any) => rp.permissions?.code).filter(Boolean);
         setPermissions(Array.from(new Set(permCodes)));
@@ -92,69 +53,103 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       }
     } catch (err) {
       console.error('Error loading permissions:', err);
+      setPermissions([]);
     }
   };
 
-  const loadProfileData = async (authUserId?: string, explicitProfileId?: number) => {
+  const loadProfileByAuthUid = async (authUserId: string): Promise<boolean> => {
     try {
-      let query = supabase.from('profiles').select('*');
-      if (explicitProfileId) {
-        query = query.eq('id', explicitProfileId);
-      } else if (authUserId) {
-        query = query.eq('auth_user_id', authUserId);
-      } else {
-        return;
+      const { data: profileData, error: profileError } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('auth_user_id', authUserId)
+        .eq('is_active', true)
+        .maybeSingle();
+
+      if (profileError) {
+        console.error('Error querying profile:', profileError);
+        return false;
       }
 
-      const { data: profileData, error: profileError } = await query.single();
-      if (profileError || !profileData) {
-        console.warn('Profile not found:', profileError);
-        return;
+      if (!profileData) {
+        console.warn('No active profile found for auth_user_id:', authUserId);
+        setProfile(null);
+        setRoles([]);
+        setPermissions([]);
+        return false;
       }
 
       setProfile(profileData);
-      localStorage.setItem('leon_active_profile_id', profileData.id.toString());
       await loadUserRolesAndPermissions(profileData.id);
+      return true;
     } catch (err) {
-      console.error('Error loading profile:', err);
+      console.error('Unexpected error loading profile:', err);
+      return false;
     }
   };
 
   useEffect(() => {
+    let isMounted = true;
+
     const initAuth = async () => {
       try {
-        await loadAvailableProfiles();
+        const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError) throw sessionError;
 
-        const { data: { session } } = await supabase.auth.getSession();
-        setUser(session?.user ?? null);
-
-        if (session?.user) {
-          await loadProfileData(session.user.id);
-        } else {
-          // Check if there was a saved profile in localStorage
-          const savedProfId = localStorage.getItem('leon_active_profile_id');
-          if (savedProfId) {
-            await loadProfileData(undefined, parseInt(savedProfId, 10));
+        if (session?.user && isMounted) {
+          setUser(session.user);
+          const hasProfile = await loadProfileByAuthUid(session.user.id);
+          if (!hasProfile && isMounted) {
+            // Usuario sin perfil activo -> cerrar sesión
+            await supabase.auth.signOut();
+            setUser(null);
+            setProfile(null);
           }
+        } else if (isMounted) {
+          setUser(null);
+          setProfile(null);
+          setRoles([]);
+          setPermissions([]);
         }
       } catch (e) {
-        console.error('Error initializing auth:', e);
+        console.error('Error initializing auth session:', e);
+        if (isMounted) {
+          setUser(null);
+          setProfile(null);
+        }
       } finally {
-        setIsLoading(false);
+        if (isMounted) {
+          setIsLoading(false);
+        }
       }
     };
 
     initAuth();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      setUser(session?.user ?? null);
+      if (!isMounted) return;
+
       if (session?.user) {
-        await loadProfileData(session.user.id);
+        setUser(session.user);
+        const hasProfile = await loadProfileByAuthUid(session.user.id);
+        if (!hasProfile && isMounted) {
+          await supabase.auth.signOut();
+          setUser(null);
+          setProfile(null);
+        }
+      } else {
+        setUser(null);
+        setProfile(null);
+        setRoles([]);
+        setPermissions([]);
       }
       setIsLoading(false);
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      isMounted = false;
+      subscription.unsubscribe();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -166,39 +161,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     [roles, permissions]
   );
 
-  const signIn = async (email: string, password?: string) => {
+  const signIn = async (email: string, password?: string): Promise<{ error?: string }> => {
     setIsLoading(true);
     try {
-      // 1. Try Supabase Auth API
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
-        password: password || 'admin123',
+        password: password || '',
       });
 
-      if (!error && data?.user) {
-        setUser(data.user);
-        await loadProfileData(data.user.id);
+      if (error) {
         setIsLoading(false);
-        return {};
+        return { error: error.message || 'Credenciales inválidas' };
       }
 
-      // 2. Direct Profile Fallback
-      const { data: prof } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('email', email.trim())
-        .single();
-
-      if (prof) {
-        setProfile(prof);
-        localStorage.setItem('leon_active_profile_id', prof.id.toString());
-        await loadUserRolesAndPermissions(prof.id);
+      if (!data?.user) {
         setIsLoading(false);
-        return {};
+        return { error: 'No se pudo obtener el usuario' };
+      }
+
+      setUser(data.user);
+      const hasProfile = await loadProfileByAuthUid(data.user.id);
+      if (!hasProfile) {
+        await supabase.auth.signOut();
+        setUser(null);
+        setProfile(null);
+        setIsLoading(false);
+        return { error: 'Usuario autenticado pero sin perfil comercial activo asignado.' };
       }
 
       setIsLoading(false);
-      return { error: error?.message || 'Usuario o contraseña no válidos' };
+      return {};
     } catch (err: any) {
       setIsLoading(false);
       return { error: err.message || 'Error al iniciar sesión' };
@@ -211,24 +203,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     } catch (e) {
       console.warn('SignOut error:', e);
     }
-    localStorage.removeItem('leon_active_profile_id');
     setUser(null);
     setProfile(null);
     setRoles([]);
     setPermissions([]);
   };
 
-  const switchProfile = async (profileId: number) => {
-    setIsLoading(true);
-    localStorage.setItem('leon_active_profile_id', profileId.toString());
-    await loadProfileData(undefined, profileId);
-    setIsLoading(false);
-  };
-
   const refreshAuth = async () => {
-    await loadAvailableProfiles();
-    if (profile) {
-      await loadProfileData(undefined, profile.id);
+    if (user?.id) {
+      await loadProfileByAuthUid(user.id);
     }
   };
 
@@ -239,12 +222,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         profile,
         roles,
         permissions,
-        availableProfiles,
         isLoading,
         hasPermission,
         signIn,
         signOut,
-        switchProfile,
         refreshAuth,
       }}
     >

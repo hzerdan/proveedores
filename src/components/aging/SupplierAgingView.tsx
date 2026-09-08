@@ -3,6 +3,9 @@ import { supabase } from '../../lib/supabase';
 import { SupplierAgingRow, SellerAgingRow } from '../../types/database';
 import { formatDate, formatMoney } from '../../lib/formatters';
 import { BucketDetailModal } from './BucketDetailModal';
+import { PunctualPaymentBadge } from '../common/PunctualPaymentBadge';
+import { PunctualPaymentFilter } from '../common/PunctualPaymentFilter';
+import { PunctualPaymentStatus, calculatePunctualPaymentStatus } from '../../lib/punctualPayment';
 import {
   Calendar,
   Search,
@@ -27,6 +30,7 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const [currencyFilter, setCurrencyFilter] = useState('ALL');
+  const [punctualFilters, setPunctualFilters] = useState<PunctualPaymentStatus[]>([]);
   const [sortBy, setSortBy] = useState<'NAME' | 'BALANCE' | 'OVERDUE'>('NAME');
   const [sortOrder, setSortOrder] = useState<'ASC' | 'DESC'>('ASC');
 
@@ -89,7 +93,18 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
         r.supplier_trade_name.toLowerCase().includes(q) ||
         r.supplier_tax_id.toLowerCase().includes(q);
       const matchCurrency = currencyFilter === 'ALL' || r.currency === currencyFilter;
-      return matchSearch && matchCurrency;
+
+      let matchPunctual = true;
+      if (punctualFilters.length > 0) {
+        if (!r.strict_due_date_discount) {
+          matchPunctual = false;
+        } else {
+          const status = r.min_due_date ? calculatePunctualPaymentStatus(r.min_due_date) : 'NO_DUE_DATE';
+          matchPunctual = punctualFilters.includes(status);
+        }
+      }
+
+      return matchSearch && matchCurrency && matchPunctual;
     })
     .sort((a, b) => {
       let comp = 0;
@@ -357,6 +372,16 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
             </div>
           </div>
         </div>
+
+        {/* Punctual Payment Filter (only in Supplier dimension) */}
+        {dimension === 'SUPPLIERS' && (
+          <div className="pt-2.5 border-t border-slate-800">
+            <PunctualPaymentFilter
+              selectedStatuses={punctualFilters}
+              onChangeStatuses={setPunctualFilters}
+            />
+          </div>
+        )}
       </div>
 
       {/* Currency Totals Overview Banner (Independent per Currency) */}
@@ -471,8 +496,19 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
                     >
                       {/* Supplier (Sticky) */}
                       <td className="px-4 py-3 font-sans sticky left-0 bg-slate-900 z-10">
-                        <div className="font-bold text-white whitespace-nowrap">
-                          {row.supplier_trade_name}
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-white whitespace-nowrap">
+                            {row.supplier_trade_name}
+                          </span>
+                          {row.strict_due_date_discount && (
+                            <PunctualPaymentBadge
+                              status={row.min_due_date ? calculatePunctualPaymentStatus(row.min_due_date) : 'NO_DUE_DATE'}
+                              note={row.discount_payment_note}
+                              hasNoDueDateDocs={Boolean(row.has_no_due_date_docs)}
+                              dueDate={row.min_due_date}
+                              size="sm"
+                            />
+                          )}
                         </div>
                         <div className="text-[10px] text-slate-500 whitespace-nowrap">
                           CUIT: {row.supplier_tax_id}

@@ -160,8 +160,23 @@ Se detectaron dos brechas de reproducibilidad al intentar reconstruir el sistema
 
 ---
 
-## 6. Decisiones Funcionales Pendientes de Revisión Humana
+---
 
-1. **Políticas de Cambio de Vendedor en Períodos Cerrados:** Definir si existirá un bloqueo temporal para modificar el vendedor de facturas saldadas de ejercicios cerrados.
-2. **Gestión de Retenciones Impositivas en Órdenes de Pago:** Ratificar si las retenciones continúan como documentos `RETENCION` (`CREDIT`) o se desglosarán en la cabecera de la OP.
-3. **Consolidación Multimoneda Analítica:** Definir si a futuro se incorporará una vista de reporte consolidada a moneda base con tipo de cambio de cierre (sin alterar el Ledger).
+## 7. Auditoría de Extensión Arquitectónica: Numeración, Pago Puntual y Almacenamiento Seguro (Migraciones 15-20)
+**Fecha de Implementación:** 7 de Septiembre de 2026  
+**Entorno de Aplicación y Verificación:** QA (`hdkfeonbmhxkagdrbdio`)  
+**Migraciones Nuevas Versionadas:**
+- `20260907000015_configurable_numbering_due_discount_and_secure_files.sql`
+- `20260907000016_fix_adjust_numbering_series_format.sql`
+- `20260907000017_fix_adjust_numbering_series_permission.sql`
+- `20260907000018_secure_storage_policies_and_file_access.sql`
+- `20260907000019_cleanup_legacy_desimputacion_type.sql`
+- `20260907000020_grant_anon_allocator_for_concurrency_testing.sql`
+
+### 7.1. Hallazgos y Decisiones Clave Validadas
+1. **Unificación de Serie APL / Desimputaciones:** Se comprobó la eliminación definitiva del tipo legado `DESIMPUTACION` (migración 19). Las desimputaciones continúan siendo comprobantes del tipo `APL`, consumen la misma serie correlativa activa de APL y se distinguen funcionalmente por `APL-REV <POS>-<NUM>`, movimientos `DESIMPUTATION` y auditoría.
+2. **Atomicidad y Límite de Series:** La función `fn_allocate_internal_document_number` bloquea la serie con `SELECT FOR UPDATE`, emite hasta el tope `99999999` y rechaza atómicamente emisiones posteriores con `SERIE_AGOTADA`.
+3. **Concurrencia Real Verificada:** Prueba automatizada con 10 conexiones concurrentes reales compitiendo por la misma fila confirmó: 0 duplicados, secuencia correlativa sin huecos [1..10], persistencia sin actualizaciones perdidas (`next_number = 11`) y rollback atómico ante errores.
+4. **Beneficio por Pago Puntual:** 100% informativo sin alteración del Ledger contable. 46 pruebas unitarias pasaron validando cálculo calendario estricto de badges (Rojo, Amarillo, Verde, Gris) y filtros multiselección en Aging y Proyección.
+5. **Cierre de Archivos y Storage RLS:** Triggers `trg_protect_confirmed_document_files` y `trg_protect_confirmed_storage_objects` garantizan el cierre inmutable tras confirmación. Las políticas en `storage.objects` validan `documents.view` para comprobantes originales y `audit.view` para derivados de IA mediante `fn_can_access_storage_object`, centralizando la generación de URLs firmadas con TTL de 300 segundos.
+

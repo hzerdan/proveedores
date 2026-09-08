@@ -4,6 +4,10 @@ import { DocumentSummaryView, DocumentSellerHistory } from '../../types/database
 import { formatDate, formatDateTime, formatMoney } from '../../lib/formatters';
 import { useAuth } from '../../context/AuthContext';
 import { DocumentSellerChangeModal } from '../documents/DocumentSellerChangeModal';
+import { DocumentFileAttachmentIndicator } from '../documents/DocumentFileAttachmentIndicator';
+import { DocumentViewerModal } from '../documents/DocumentViewerModal';
+import { PunctualPaymentBadge } from '../common/PunctualPaymentBadge';
+import { calculatePunctualPaymentStatus } from '../../lib/punctualPayment';
 import {
   X,
   FileText,
@@ -17,6 +21,7 @@ import {
   UserPlus,
   Eye,
 } from 'lucide-react';
+
 
 interface DocumentDetailModalProps {
   documentId: number | null;
@@ -40,6 +45,7 @@ export const DocumentDetailModal: React.FC<DocumentDetailModalProps> = ({
   const [sellerHistory, setSellerHistory] = useState<DocumentSellerHistory[]>([]);
   const [loading, setLoading] = useState(false);
   const [sellerModalOpen, setSellerModalOpen] = useState(false);
+  const [viewerOpen, setViewerOpen] = useState(false);
 
   const fetchDetail = useCallback(async () => {
     if (!documentId) return;
@@ -111,6 +117,11 @@ export const DocumentDetailModal: React.FC<DocumentDetailModalProps> = ({
   const canAssignSeller = hasPermission('documents.assign_seller') && doc?.seller_id === null;
   const canChangeSeller = hasPermission('documents.change_seller') && doc?.seller_id !== null;
 
+  const punctualStatus =
+    doc && doc.strict_due_date_discount && doc.reference_balance > 0
+      ? calculatePunctualPaymentStatus(doc.due_date)
+      : null;
+
   return (
     <>
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
@@ -132,6 +143,20 @@ export const DocumentDetailModal: React.FC<DocumentDetailModalProps> = ({
                       {doc.document_type_name}
                     </span>
                   )}
+                  {doc?.files_count !== undefined && doc.files_count > 0 && (
+                    <DocumentFileAttachmentIndicator
+                      filesCount={doc.files_count}
+                      onClick={() => setViewerOpen(true)}
+                    />
+                  )}
+                  {punctualStatus && (
+                    <PunctualPaymentBadge
+                      status={punctualStatus}
+                      size="sm"
+                      note={doc?.discount_payment_note || undefined}
+                    />
+                  )}
+
                   {doc?.seller_display_name ? (
                     <span className="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30 font-semibold flex items-center gap-1">
                       <UserCheck className="w-3 h-3" />
@@ -142,6 +167,7 @@ export const DocumentDetailModal: React.FC<DocumentDetailModalProps> = ({
                       Sin Vendedor
                     </span>
                   )}
+
 
                   {/* Seller Action Button */}
                   {canAssignSeller && (
@@ -497,6 +523,17 @@ export const DocumentDetailModal: React.FC<DocumentDetailModalProps> = ({
           }}
         />
       )}
+
+      {/* Document Viewer Modal */}
+      {viewerOpen && doc && (
+        <DocumentViewerModal
+          isOpen={viewerOpen}
+          onClose={() => setViewerOpen(false)}
+          documentId={doc.document_id}
+          humanReference={doc.human_reference}
+        />
+      )}
     </>
   );
 };
+

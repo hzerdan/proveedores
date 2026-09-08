@@ -360,10 +360,73 @@ Estructura del Sidebar (`src/config/navigation.ts`):
 
 ---
 
-## 11. Decisiones Funcionales Pendientes de Revisión Humana `[PENDIENTE]`
 
-Las siguientes definiciones de negocio requieren acuerdo humano previo a su implementación:
+---
 
-1. **Políticas de Cambio de Vendedor en Períodos Cerrados:** Definir si existirá un bloqueo temporal o autorización especial para modificar el vendedor de facturas saldadas de ejercicios contables anteriores.
-2. **Gestión de Retenciones Impositivas en Órdenes de Pago:** Ratificar si las retenciones sufridas (Ganancias, IIBB, SUSS) se continuarán cargando como comprobantes independientes de tipo `RETENCION` (`CREDIT`) o si se incorporarán como desgloses analíticos nativos en la cabecera de la OP.
-3. **Consolidación Multimoneda Analítica:** Definir si a futuro se agregará un convertidor informativo a moneda base de reporte en el Aging, manteniendo inalterada la estricta segregación contable original por moneda.
+## 12. Numeración Documental Configurable y Series `[IMPLEMENTADO]`
+
+### 12.1. Modos de Numeración por Tipo Documental
+Cada tipo de documento (`document_types`) define su comportamiento en `numbering_mode`:
+- **`EXTERNAL` (Por defecto):** Utilizado para comprobantes emitidos por terceros (Facturas, Notas de Débito, Notas de Crédito, Recibos de proveedores). Requiere ingreso de letra, punto de venta y número externo. Cuenta con detección proactiva de duplicados y justificación auditada (`documents.duplicate_override`).
+- **`INTERNAL_SEQUENCE`:** Utilizado para documentos de emisión interna propia (Órdenes de Pago `OP`, Aplicaciones de Saldo `APL` y Desimputaciones `APL-REV`). Asigna atómicamente la numeración correlativa en PostgreSQL mediante `fn_allocate_internal_document_number`.
+
+### 12.2. Modelo de Series (`document_numbering_series`)
+- **Punto de Venta:** 4 dígitos numéricos (`0001` a `9999`).
+- **Número Correlativo:** 8 dígitos numéricos (`00000001` a `99999999`).
+- **Tope de Serie:** El número `99999999` es el último emitible. Tras su consumo, la serie queda en estado `SERIE_AGOTADA` y rechaza nuevas emisiones sin reciclar números ni generar 9 dígitos.
+- **Unicidad:** Restricción `uq_doc_numbering_series` única sobre `(document_type_id, letter, point_of_sale)`.
+- **Inmutabilidad en Cabecera:** Cada documento confirmado registra su `numbering_series_id` y `document_number`, protegido contra modificaciones por trigger.
+
+### 12.3. Unificación de Serie para APL y Desimputaciones
+- Las desimputaciones continúan siendo documentos del tipo `APL`.
+- Consumen la misma serie correlativa activa de APL, garantizando correlatividad estricta sin saltos ni tipos paralelos.
+- Se distinguen funcionalmente por la referencia visible `APL-REV <POS>-<NUM>`, movimientos contables `DESIMPUTATION` y registro de auditoría.
+- No existe ningún tipo documental independiente `DESIMPUTACION`.
+
+### 12.4. Ajuste Auditado del Contador (`rpc_adjust_numbering_series`)
+- Requiere permiso `system.manage`.
+- Solo permite avanzar el contador (`new_number > previous_number`), nunca retroceder.
+- Valida ausencia de colisiones contra comprobantes ya emitidos en la serie.
+- Auditoría append-only en `document_numbering_series_adjustments` con motivo obligatorio (mínimo 5 caracteres), usuario, fecha y números anterior/nuevo.
+
+---
+
+## 13. Beneficio Condicionado al Pago Puntual `[IMPLEMENTADO]`
+
+### 13.1. Naturaleza Exclusivamente Informativa
+- No altera importes, vencimientos, saldos de cuenta corriente, asientos del Ledger ni imputaciones.
+- Parametrizado por proveedor mediante `suppliers.strict_due_date_discount` (boolean) y `suppliers.discount_payment_note` (text) con permiso `suppliers.manage`.
+
+### 13.2. Clasificación Temporal y Badges Accesibles
+La evaluación de vencimientos se basa en fecha calendario estricta sin desfasaje de zona horaria:
+- **Rojo (Vencido):** Al menos una obligación con saldo pendiente positivo cuya fecha de vencimiento es anterior a la fecha de corte (`due_date < cutoff_date`).
+- **Amarillo (Vence dentro de 7 días):** Sin obligaciones vencidas y con al menos una obligación que vence hoy o dentro de los próximos 7 días corridos (`due_date >= cutoff_date AND due_date <= cutoff_date + 7`).
+- **Verde (Vence después de 7 días):** Sin vencimientos en los próximos 7 días y con obligaciones futuras (`due_date > cutoff_date + 7`).
+- **Gris (Sin vencimiento):** Proveedor con beneficio pero cuyas obligaciones carecen de `due_date`.
+- **Badges Accesibles:** Incorporan simultáneamente color de alto contraste, icono semántico, texto explícito y tooltip descriptivo.
+
+### 13.3. Filtro Multiselección por Estado
+- Disponible exclusivamente en las vistas analíticas de **Aging (Saldo General)** y **Proyección de Pagos**.
+- Permite seleccionar combinaciones libres de estados (Rojo, Amarillo, Verde, Gris).
+- No altera el ordenamiento ni oculta totales analíticos generales de forma confusa.
+
+---
+
+## 14. Seguridad de Archivos, Almacenamiento y Cierre Inmutable `[IMPLEMENTADO]`
+
+### 14.1. Cierre Inmutable tras Confirmación Documental
+- Una vez confirmado un documento (`status = 'CONFIRMED'`), su conjunto de archivos queda definitivamente cerrado.
+- Triggers en PostgreSQL (`trg_protect_confirmed_document_files` y `trg_protect_confirmed_storage_objects`) bloquean:
+  - Inserción de nuevos archivos a documentos confirmados.
+  - Modificación o desvinculación de registros en `document_files`.
+  - Modificación (`UPDATE`) o eliminación (`DELETE`) de los objetos binarios físicos en `storage.objects`.
+
+### 14.2. Clasificación de Originales y Derivados de IA
+- **`ORIGINAL` / `INVOICE_PDF` / `INVOICE_IMAGE`:** Comprobante original cargado por el usuario. Visible en el visor estándar habitual para usuarios con `documents.view`.
+- **`AI_DERIVATIVE`:** Transformación o derivado específico suministrado al modelo de IA (si difiere del original). Excluido del visor ordinario; accesible exclusivamente desde la auditoría de extracciones para usuarios con `audit.view`.
+
+### 14.3. URLs Firmadas Ephemeral (TTL 300s) y Políticas Storage RLS
+- Acceso centralizado mediante RPC `rpc_get_document_file_url` que valida roles y permisos antes de autorizar la descarga.
+- Políticas RLS estrictas en `storage.objects` (`supplier_docs_select_secure`) que verifican mediante `fn_can_access_storage_object` los permisos del usuario sobre la fila en `document_files`, impidiendo el acceso directo aun cuando se conozca el `storage_path`.
+- Vigencia fija y no persistente de 300 segundos para visualización segura.
+

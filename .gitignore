@@ -63,3 +63,9 @@ Thumbs.db
 # Supabase Local Temp & State (preserves migrations, functions and config.toml)
 supabase/.temp/
 supabase/.branches/
+
+# Local Scratch & Diagnostics
+scratch/
+prueba.pgsql
+RPC_NUMERACION_QA.json
+RPC_UPLOAD_SESSIONS_QA.json

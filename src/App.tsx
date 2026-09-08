@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { AppLayout } from './components/layout/AppLayout';
 import { NavigationTab } from './config/navigation';
@@ -26,7 +26,7 @@ import { Supplier, DocumentSummaryView, IntakeSource } from './types/database';
 import { ExtractedInvoicePayload } from './lib/aiExtractor';
 
 function MainContent() {
-  const { profile, isLoading } = useAuth();
+  const { user, profile, isLoading } = useAuth();
   const [currentTab, setCurrentTab] = useState<NavigationTab>('suppliers');
   const [selectedSupplierId, setSelectedSupplierId] = useState<number | null>(null);
 
@@ -65,6 +65,18 @@ function MainContent() {
   // Refresh trigger key
   const [refreshKey, setRefreshKey] = useState(0);
   const triggerRefresh = () => setRefreshKey((prev) => prev + 1);
+
+  // Global tab navigation listener (e.g. from document viewer to audit logs)
+  useEffect(() => {
+    const handleNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ tab: NavigationTab }>;
+      if (customEvent.detail?.tab) {
+        setCurrentTab(customEvent.detail.tab);
+      }
+    };
+    window.addEventListener('leon:navigate_tab', handleNavigate);
+    return () => window.removeEventListener('leon:navigate_tab', handleNavigate);
+  }, []);
 
   const handleSelectSupplierFromList = (supId: number) => {
     setSelectedSupplierId(supId);
@@ -141,7 +153,7 @@ function MainContent() {
     );
   }
 
-  if (!profile) {
+  if (!user || !profile) {
     return <LoginForm />;
   }
 

@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { Supplier } from '../../types/database';
 import { isValidCuit, formatCuit, cleanCuit } from '../../lib/cuitValidator';
-import { X, Building2, Check, AlertCircle } from 'lucide-react';
+import { X, Building2, Check, AlertCircle, AlertTriangle } from 'lucide-react';
 
 interface SupplierQuickCreateModalProps {
   isOpen: boolean;
@@ -70,6 +70,8 @@ export const SupplierQuickCreateModal: React.FC<SupplierQuickCreateModalProps> =
     }
   };
 
+  const isCuitValid = taxId ? isValidCuit(taxId) : null;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
       <div className="bg-slate-900 border border-slate-800 w-full max-w-md rounded-2xl shadow-2xl overflow-hidden flex flex-col">
@@ -114,8 +116,26 @@ export const SupplierQuickCreateModal: React.FC<SupplierQuickCreateModalProps> =
                 if (isValidCuit(taxId)) setTaxId(formatCuit(taxId));
               }}
               required
-              className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono placeholder-slate-500 focus:ring-2 focus:ring-sky-500/50"
+              className={`w-full bg-slate-800 border rounded-xl px-3.5 py-2.5 text-white font-mono text-sm tracking-wider placeholder-slate-500 transition-colors ${
+                isCuitValid === false
+                  ? 'border-amber-500/80 focus:border-amber-400 focus:ring-1 focus:ring-amber-500'
+                  : isCuitValid === true
+                  ? 'border-emerald-500/60 focus:border-emerald-400'
+                  : 'border-slate-700 focus:border-sky-500'
+              }`}
             />
+            {isCuitValid === false && (
+              <p className="text-[11px] text-amber-400 mt-1.5 flex items-center gap-1.5 font-medium">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                <span>CUIT con error de Módulo 11 o longitud no válida. Verificá los 11 dígitos.</span>
+              </p>
+            )}
+            {isCuitValid === true && (
+              <p className="text-[11px] text-emerald-400 mt-1 flex items-center gap-1 font-medium">
+                <Check className="w-3.5 h-3.5 shrink-0" />
+                <span>CUIT válido según algoritmo AFIP</span>
+              </p>
+            )}
           </div>
 
           <div>

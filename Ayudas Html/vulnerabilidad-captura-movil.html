@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Captura móvil: vulnerabilidad y corrección</title>
+  <style>
+    :root{color-scheme:light dark;--bg:#f6f8fc;--panel:#fff;--text:#172033;--muted:#5f6b7d;--line:#dce2ec;--bad:#b42318;--badbg:#fff0ee;--good:#067647;--goodbg:#ecfdf3;--accent:#275dad;--accentbg:#edf4ff;--warn:#9a6700;--warnbg:#fff8dc;--code:#101828}
+    @media(prefers-color-scheme:dark){:root{--bg:#0f1420;--panel:#171e2c;--text:#edf1f7;--muted:#aeb8c8;--line:#30394a;--bad:#ff8a80;--badbg:#351d20;--good:#6ce9a6;--goodbg:#143226;--accent:#8db8ff;--accentbg:#182a47;--warn:#ffd666;--warnbg:#352d16;--code:#f2f4f7}}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}.wrap{max-width:1080px;margin:auto;padding:32px 20px 60px}h1{font-size:clamp(2rem,5vw,3.7rem);line-height:1.05;margin:.2em 0}.lead{font-size:1.12rem;color:var(--muted);max-width:780px}.eyebrow{font-weight:700;color:var(--accent);letter-spacing:.08em;text-transform:uppercase;font-size:.78rem}.tabs{display:flex;gap:8px;margin:28px 0 18px;flex-wrap:wrap}.tabs button{font:inherit;font-weight:700;padding:11px 16px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--text);cursor:pointer}.tabs button[aria-selected="true"]{background:var(--accent);color:white;border-color:var(--accent)}.view{display:none}.view.active{display:block}.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;align-items:stretch}.step{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px;position:relative;min-height:160px}.step:not(:last-child):after{content:"→";position:absolute;right:-13px;top:42%;z-index:2;background:var(--bg);padding:2px;color:var(--muted);font-size:1.3rem}.num{display:inline-grid;place-items:center;width:28px;height:28px;border-radius:50%;background:var(--accentbg);color:var(--accent);font-weight:800}.step h3{font-size:1rem;margin:10px 0 6px}.step p{font-size:.9rem;color:var(--muted);margin:0}.bad .step:nth-child(2),.bad .step:nth-child(3){border-color:var(--bad);background:var(--badbg)}.good .step:nth-child(2),.good .step:nth-child(3){border-color:var(--good);background:var(--goodbg)}.verdict{margin-top:16px;padding:16px 18px;border-radius:12px;font-weight:700}.bad .verdict{background:var(--badbg);color:var(--bad)}.good .verdict{background:var(--goodbg);color:var(--good)}.grid{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:32px}.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px}.card h2{margin-top:0;font-size:1.25rem}.fox{border-left:5px solid var(--accent)}code{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--code);background:var(--accentbg);padding:.12em .35em;border-radius:5px}pre{white-space:pre-wrap;background:var(--accentbg);padding:16px;border-radius:10px;overflow:auto}.finding{display:grid;grid-template-columns:auto 1fr;gap:12px;margin:13px 0}.icon{font-weight:900}.x{color:var(--bad)}.ok{color:var(--good)}.warn{background:var(--warnbg);color:var(--warn);padding:14px 16px;border-radius:10px}.glossary dt{font-weight:800;margin-top:12px}.glossary dd{margin-left:0;color:var(--muted)}.foot{margin-top:34px;color:var(--muted);font-size:.9rem;border-top:1px solid var(--line);padding-top:18px}
+    @media(max-width:800px){.flow{grid-template-columns:1fr}.step{min-height:0}.step:not(:last-child):after{content:"↓";top:auto;bottom:-18px;right:50%;background:var(--bg)}.grid{grid-template-columns:1fr}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <div class="eyebrow">Cuentas corrientes de proveedores · QA</div>
+  <h1>La puerta estaba cerrada,<br>pero cualquiera podía pedir una llave</h1>
+  <p class="lead">La captura por QR necesita admitir un celular sin login. El error no fue permitir ese celular: fue dejar que un visitante anónimo creara su propia sesión válida y guardara archivos antes de comprobar el token.</p>
+  <div class="tabs" role="tablist" aria-label="Comparar flujos">
+    <button id="tab-bad" role="tab" aria-selected="true" aria-controls="bad">Flujo vulnerable</button>
+    <button id="tab-good" role="tab" aria-selected="false" aria-controls="good">Flujo corregido</button>
+  </div>
+  <section id="bad" class="view active bad" role="tabpanel" aria-labelledby="tab-bad">
+    <div class="flow">
+      <article class="step"><span class="num">1</span><h3>Visitante anónimo</h3><p>Conoce la anon key, que es pública en una app web.</p></article>
+      <article class="step"><span class="num">2</span><h3>Crea una sesión</h3><p><code>rpc_create_upload_session</code> está expuesta a <code>anon</code>.</p></article>
+      <article class="step"><span class="num">3</span><h3>Sube primero</h3><p>RLS acepta cualquier ruta que empiece con <code>temp-uploads/</code>.</p></article>
+      <article class="step"><span class="num">4</span><h3>Declara metadatos</h3><p>La RPC confía en ruta, MIME y tamaño enviados por el cliente.</p></article>
+      <article class="step"><span class="num">5</span><h3>Queda registrado</h3><p>La sesión se atribuye al primer perfil si no hay usuario autenticado.</p></article>
+    </div>
+    <div class="verdict">Resultado: la anon key sola permite fabricar una sesión legítima y consumir almacenamiento.</div>
+  </section>
+  <section id="good" class="view good" role="tabpanel" aria-labelledby="tab-good">
+    <div class="flow">
+      <article class="step"><span class="num">1</span><h3>Operador autenticado</h3><p>Debe tener perfil activo y permiso <code>documents.create</code>.</p></article>
+      <article class="step"><span class="num">2</span><h3>Crea el QR</h3><p>El backend emite un token único, hasheado y con 15 minutos de vida.</p></article>
+      <article class="step"><span class="num">3</span><h3>Valida antes</h3><p>El móvil presenta el token. El backend controla estado, vencimiento y uso único.</p></article>
+      <article class="step"><span class="num">4</span><h3>Autoriza una ruta</h3><p>El backend genera una ruta no reutilizable y una autorización limitada.</p></article>
+      <article class="step"><span class="num">5</span><h3>Verifica y registra</h3><p>Contrasta objeto, MIME y tamaño reales; luego completa la sesión.</p></article>
+    </div>
+    <div class="verdict">Resultado: sin un QR válido y vigente, el archivo nunca obtiene autorización para almacenarse.</div>
+  </section>
+  <div class="grid">
+    <section class="card fox">
+      <h2>Traducido a FoxPro</h2>
+      <p>Imaginá una pantalla de alta donde primero se ejecutara:</p>
+      <pre><code>APPEND BLANK
+REPLACE archivo WITH contenido</code></pre>
+      <p>y recién después preguntáramos si el operador tenía permiso. Aunque luego mostremos “acceso denegado”, el registro ya fue creado.</p>
+      <p>La corrección es el orden clásico que ya conocés:</p>
+      <pre><code>IF sesion_valida AND permiso_valido
+   APPEND BLANK
+   REPLACE ...
+ENDIF</code></pre>
+    </section>
+    <section class="card">
+      <h2>Qué controles ya funcionaban</h2>
+      <div class="finding"><span class="icon ok">✓</span><span>Bucket privado y límite de 20 MB.</span></div>
+      <div class="finding"><span class="icon ok">✓</span><span>MIME limitado a PDF e imágenes admitidas.</span></div>
+      <div class="finding"><span class="icon ok">✓</span><span>Lectura, actualización y eliminación anónimas bloqueadas.</span></div>
+      <div class="finding"><span class="icon ok">✓</span><span>Token guardado como hash SHA-256.</span></div>
+      <div class="finding"><span class="icon ok">✓</span><span><code>FOR UPDATE</code> evita completar dos veces la misma sesión en paralelo.</span></div>
+    </section>
+    <section class="card">
+      <h2>Qué se está corrigiendo</h2>
+      <div class="finding"><span class="icon x">×</span><span>Eliminar el permiso anónimo para crear sesiones.</span></div>
+      <div class="finding"><span class="icon x">×</span><span>Eliminar el fallback que atribuye la sesión al primer perfil.</span></div>
+      <div class="finding"><span class="icon x">×</span><span>Eliminar el INSERT anónimo general en <code>temp-uploads/%</code>.</span></div>
+      <div class="finding"><span class="icon x">×</span><span>Validar el token antes de autorizar almacenamiento.</span></div>
+      <div class="finding"><span class="icon x">×</span><span>No confiar en ruta, MIME y tamaño declarados por el navegador.</span></div>
+      <div class="finding"><span class="icon x">×</span><span>Corregir la expiración que hoy se revierte al lanzar una excepción.</span></div>
+    </section>
+    <section class="card glossary">
+      <h2>Diccionario breve</h2>
+      <dl>
+        <dt>Anon key</dt><dd>Identifica a la aplicación pública. No es una contraseña y debe suponerse conocida.</dd>
+        <dt>RLS</dt><dd>Reglas de la base que deciden qué filas u objetos puede tocar cada rol.</dd>
+        <dt>RPC</dt><dd>Procedimiento del servidor invocado desde JavaScript como una función remota.</dd>
+        <dt>Token QR</dt><dd>Secreto temporal que prueba que ese celular recibió una invitación válida.</dd>
+        <dt>Hash</dt><dd>Huella irreversible del token. Permite comprobarlo sin guardar el secreto original.</dd>
+        <dt>URL firmada</dt><dd>Permiso temporal y limitado para subir un objeto concreto, no una llave general del bucket.</dd>
+      </dl>
+    </section>
+  </div>
+  <p class="warn"><strong>Idea central:</strong> la anon key identifica la aplicación; el token QR autoriza la operación. Nunca deben tratarse como si fueran el mismo nivel de seguridad.</p>
+  <p class="foot">Basado en las políticas y RPC leídas en QA el 8 de septiembre de 2026. La solución definitiva debe validarse contra la implementación que entregue el agente.</p>
+</main>
+<script>
+  const tabs=[document.getElementById('tab-bad'),document.getElementById('tab-good')];
+  tabs.forEach(tab=>tab.addEventListener('click',()=>{
+    tabs.forEach(t=>{const selected=t===tab;t.setAttribute('aria-selected',String(selected));document.getElementById(t.getAttribute('aria-controls')).classList.toggle('active',selected)});
+  }));
+</script>
+</body>
+</html>

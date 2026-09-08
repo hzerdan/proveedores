@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>OP, APL y desimputación — explicación conceptual</title>
+  <style>
+    :root{color-scheme:light dark;--bg:#f7f8fb;--panel:#fff;--ink:#172033;--muted:#667085;--line:#d8deea;--blue:#285ea8;--blue-soft:#edf4ff;--green:#067647;--green-soft:#ecfdf3;--red:#b42318;--red-soft:#fff0ee;--amber:#9a6700;--amber-soft:#fff8dc;--violet:#6941c6;--violet-soft:#f4f0ff}
+    @media(prefers-color-scheme:dark){:root{--bg:#0e1420;--panel:#171e2c;--ink:#edf1f7;--muted:#aeb8c8;--line:#30394a;--blue:#8db8ff;--blue-soft:#182a47;--green:#6ce9a6;--green-soft:#143226;--red:#ff8a80;--red-soft:#351d20;--amber:#ffd666;--amber-soft:#352d16;--violet:#c7a7ff;--violet-soft:#2a2140}}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif}.wrap{max-width:1120px;margin:auto;padding:34px 20px 64px}.eyebrow{color:var(--blue);font-size:.78rem;font-weight:750;letter-spacing:.08em;text-transform:uppercase}h1{font-size:clamp(2rem,5vw,3.6rem);line-height:1.06;margin:.2em 0 .3em;max-width:900px}h2{font-size:1.45rem;margin:0 0 .45rem}h3{font-size:1rem;margin:.2rem 0}.lead{max-width:820px;color:var(--muted);font-size:1.1rem}.principle{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:26px 0}.principle div{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:16px}.principle strong{display:block;color:var(--blue);margin-bottom:4px}.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:32px 0 16px}.tabs button,.stepper button{font:inherit;font-weight:700;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--ink);padding:11px 15px;cursor:pointer}.tabs button[aria-selected=true]{background:var(--blue);border-color:var(--blue);color:white}.scenario{display:none}.scenario.active{display:block}.scenario-head{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px;margin-bottom:14px}.scenario-head p{color:var(--muted);margin:.35rem 0 0}.stepper{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 0}.stepper .counter{font-weight:750;color:var(--muted)}.stepper button:disabled{opacity:.4;cursor:not-allowed}.stage{display:grid;grid-template-columns:1.05fr .95fr;gap:16px}.card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:20px}.stage-title{display:flex;align-items:center;gap:10px;margin-bottom:14px}.dot{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:var(--blue-soft);color:var(--blue);font-weight:800}.docs{display:grid;gap:9px}.doc{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;border:1px solid var(--line);border-radius:11px;padding:12px}.doc .kind{font-weight:800}.amount{font-weight:800;font-variant-numeric:tabular-nums}.debit{color:var(--red)}.credit{color:var(--green)}.neutral{color:var(--violet)}.ledger{width:100%;border-collapse:collapse;font-size:.9rem}.ledger th,.ledger td{text-align:left;border-bottom:1px solid var(--line);padding:9px 7px;vertical-align:top}.ledger th{color:var(--muted);font-size:.78rem;text-transform:uppercase;letter-spacing:.04em}.ledger td:last-child{text-align:right;font-weight:800;font-variant-numeric:tabular-nums}.balance{display:grid;grid-template-columns:1fr auto;gap:7px 16px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line)}.balance span:nth-child(even){font-weight:800;font-variant-numeric:tabular-nums}.explain{margin-top:16px;padding:15px 17px;border-radius:12px;background:var(--blue-soft);color:var(--blue);font-weight:650}.formula{margin-top:16px;text-align:center;padding:18px;border-radius:14px;background:var(--violet-soft);color:var(--violet);font:700 1.05rem ui-monospace,SFMono-Regular,Consolas,monospace}.legend{display:flex;gap:18px;flex-wrap:wrap;margin:18px 0;color:var(--muted);font-size:.9rem}.legend b{font-size:1.15rem}.takeaway{margin-top:28px;background:var(--amber-soft);color:var(--amber);padding:18px;border-radius:14px}.footer{margin-top:30px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:.9rem}
+    @media(max-width:800px){.principle,.stage{grid-template-columns:1fr}.stepper{align-items:stretch}.stepper button{flex:1}.stepper .counter{align-self:center}.ledger{font-size:.82rem}.card{padding:15px}}
+  </style>
+</head>
+<body>
+<main class="wrap">
+  <div class="eyebrow">Modelo económico del sistema</div>
+  <h1>Cómo se relacionan una OP, una factura y un APL</h1>
+  <p class="lead">Pensalo como un mayor auxiliar: cada documento deja movimientos con signo. El saldo no se “marca como pagado”; se calcula sumando el Ledger por proveedor, moneda y documento de referencia.</p>
+
+  <section class="principle" aria-label="Principios fundamentales">
+    <div><strong>Factura = deuda</strong><span>Genera saldo positivo: la empresa le debe al proveedor.</span></div>
+    <div><strong>OP = pago o crédito</strong><span>Genera saldo negativo: reduce deuda o queda disponible.</span></div>
+    <div><strong>APL = traslado</strong><span>Consume un crédito y cancela una deuda; siempre suma cero.</span></div>
+  </section>
+
+  <nav class="tabs" role="tablist" aria-label="Escenarios">
+    <button role="tab" aria-selected="true" data-tab="anticipada">1. OP antes de factura</button>
+    <button role="tab" aria-selected="false" data-tab="directa">2. OP después de facturas</button>
+    <button role="tab" aria-selected="false" data-tab="desimputacion">3. Desimputación</button>
+  </nav>
+
+  <section id="anticipada" class="scenario active" data-index="0">
+    <header class="scenario-head"><h2>OP anticipada: primero pagamos, después llegan las facturas</h2><p>La OP nace sin una factura conocida. Su importe queda como crédito libre del proveedor. Cuando llegan las facturas, un APL traslada ese crédito hacia ellas.</p></header>
+    <div class="stepper"><button data-action="prev">← Anterior</button><span class="counter" aria-live="polite"></span><button data-action="next">Siguiente →</button></div>
+    <div class="stage" aria-live="polite"></div>
+  </section>
+
+  <section id="directa" class="scenario" data-index="0">
+    <header class="scenario-head"><h2>OP posterior: las facturas ya son conocidas</h2><p>La OP nace imputada directamente. No hace falta crear un APL intermedio porque al emitir el pago ya sabemos exactamente qué facturas cancela.</p></header>
+    <div class="stepper"><button data-action="prev">← Anterior</button><span class="counter" aria-live="polite"></span><button data-action="next">Siguiente →</button></div>
+    <div class="stage" aria-live="polite"></div>
+  </section>
+
+  <section id="desimputacion" class="scenario" data-index="0">
+    <header class="scenario-head"><h2>Desimputación: no borramos el error, lo compensamos</h2><p>Si una aplicación fue equivocada, el sistema conserva el hecho original y genera un APL-REV con movimientos contrarios.</p></header>
+    <div class="stepper"><button data-action="prev">← Anterior</button><span class="counter" aria-live="polite"></span><button data-action="next">Siguiente →</button></div>
+    <div class="stage" aria-live="polite"></div>
+  </section>
+
+  <div class="legend"><span><b class="debit">+</b> deuda</span><span><b class="credit">−</b> crédito o pago</span><span><b class="neutral">0</b> traslado sin cambiar el saldo global</span></div>
+  <div class="takeaway"><strong>La idea más importante:</strong> una OP reduce el saldo del proveedor. Si la deuda ya existe, se imputa al nacer. Si todavía no existe, queda como crédito libre y más tarde un APL lo aplica. Desimputar significa crear el movimiento opuesto, nunca borrar el anterior.</div>
+  <p class="footer">Ejemplos conceptuales en ARS. En el sistema real, todos los cálculos permanecen separados por proveedor y moneda. <code>account_movements</code> es la fuente de verdad económica.</p>
+</main>
+
+<script>
+const scenarios={
+ anticipada:[
+  {title:'Se emite una OP por $1.000',note:'Todavía no hay facturas. La OP deja un crédito libre de $1.000.',docs:[['OP 0100-00000001','Crédito libre','− $1.000']],ledger:[['OP','ref. OP','REMAINDER','− $1.000']],balances:[['Saldo OP','− $1.000'],['Saldo proveedor','− $1.000']]},
+  {title:'Llegan dos facturas',note:'Ahora existe deuda por $1.000, pero todavía no está relacionada con el crédito anticipado.',docs:[['OP 0100-00000001','Crédito libre','− $1.000'],['FAC A 0001-00000400','Deuda','+ $400'],['FAC A 0001-00000600','Deuda','+ $600']],ledger:[['OP','ref. OP','REMAINDER','− $1.000'],['FAC 400','ref. FAC 400','ORIGIN','+ $400'],['FAC 600','ref. FAC 600','ORIGIN','+ $600']],balances:[['Crédito libre OP','− $1.000'],['Deuda facturas','+ $1.000'],['Saldo proveedor','$0']]},
+  {title:'Se crea un APL de suma cero',note:'El APL consume el crédito de la OP y lo distribuye entre las dos facturas.',docs:[['APL 0100-00000001','Traslado','$0 neto'],['OP anticipada','Queda cancelada','$0'],['FAC $400 + FAC $600','Quedan canceladas','$0']],ledger:[['APL','ref. OP','APL_TRANSFER','+ $1.000'],['APL','ref. FAC 400','APL_TRANSFER','− $400'],['APL','ref. FAC 600','APL_TRANSFER','− $600']],balances:[['Saldo OP','$0'],['Saldo FAC 400','$0'],['Saldo FAC 600','$0'],['Saldo proveedor','$0']],formula:'+ 1.000 − 400 − 600 = 0'}
+ ],
+ directa:[
+  {title:'Ya existen dos facturas',note:'El proveedor tiene una deuda total de $1.000.',docs:[['FAC A 0001-00000700','Deuda','+ $700'],['FAC A 0001-00000300','Deuda','+ $300']],ledger:[['FAC 700','ref. FAC 700','ORIGIN','+ $700'],['FAC 300','ref. FAC 300','ORIGIN','+ $300']],balances:[['Saldo FAC 700','+ $700'],['Saldo FAC 300','+ $300'],['Saldo proveedor','+ $1.000']]},
+  {title:'Se emite una OP por $1.000',note:'En el mismo acto se indican $700 para la primera factura y $300 para la segunda.',docs:[['OP 0100-00000002','Pago total','− $1.000'],['FAC $700','Imputada','$0'],['FAC $300','Imputada','$0']],ledger:[['OP','ref. FAC 700','IMPUTATION','− $700'],['OP','ref. FAC 300','IMPUTATION','− $300']],balances:[['Saldo FAC 700','$0'],['Saldo FAC 300','$0'],['Crédito libre OP','$0'],['Saldo proveedor','$0']],formula:'OP aplicada: − 700 − 300 = − 1.000'},
+  {title:'¿Y si la OP fuera por $1.200?',note:'Los $1.000 cancelarían las facturas y los $200 restantes quedarían como crédito libre de la propia OP.',docs:[['Facturas','Canceladas','$0'],['OP','Remanente disponible','− $200']],ledger:[['OP','ref. FAC 700','IMPUTATION','− $700'],['OP','ref. FAC 300','IMPUTATION','− $300'],['OP','ref. OP','REMAINDER','− $200']],balances:[['Deuda facturas','$0'],['Crédito libre OP','− $200'],['Saldo proveedor','− $200']]}
+ ],
+ desimputacion:[
+  {title:'Partimos de una imputación ya confirmada',note:'La OP aplicó $300 a una factura, pero luego descubrimos que esa aplicación era incorrecta.',docs:[['FAC A 0001-00000300','Cancelada por error','$0'],['OP 0100-00000002','Sin crédito libre','$0']],ledger:[['FAC','ref. FAC','ORIGIN','+ $300'],['OP','ref. FAC','IMPUTATION','− $300']],balances:[['Saldo FAC','$0'],['Crédito libre OP','$0'],['Saldo proveedor','$0']]},
+  {title:'Se genera un APL-REV',note:'No se elimina la imputación de −$300. Se agregan dos movimientos compensatorios.',docs:[['APL-REV 0100-00000003','Contra-asiento','$0 neto'],['FAC','Deuda restaurada','+ $300'],['OP','Crédito restaurado','− $300']],ledger:[['APL-REV','ref. FAC','DESIMPUTATION','+ $300'],['APL-REV','ref. OP','DESIMPUTATION','− $300']],balances:[['Saldo FAC','+ $300'],['Crédito libre OP','− $300'],['Saldo proveedor','$0']],formula:'+ 300 − 300 = 0'},
+  {title:'La historia queda completa',note:'Se ve la aplicación original y también su reversión. La deuda vuelve a la factura y el pago vuelve a estar disponible.',docs:[['Imputación original','Se conserva','− $300 a FAC'],['APL-REV','Se agrega','+ $300 a FAC / − $300 a OP']],ledger:[['OP','ref. FAC','IMPUTATION','− $300'],['APL-REV','ref. FAC','DESIMPUTATION','+ $300'],['APL-REV','ref. OP','DESIMPUTATION','− $300']],balances:[['Factura nuevamente adeudada','+ $300'],['OP nuevamente disponible','− $300'],['Efecto del APL-REV','$0']]}
+ ]
+};
+function cls(v){return v.trim().startsWith('+')?'debit':v.trim().startsWith('−')?'credit':'neutral'}
+function render(section){const key=section.id,items=scenarios[key],i=Number(section.dataset.index),s=items[i];section.querySelector('.counter').textContent=`Paso ${i+1} de ${items.length}`;section.querySelector('[data-action=prev]').disabled=i===0;section.querySelector('[data-action=next]').disabled=i===items.length-1;section.querySelector('.stage').innerHTML=`<article class="card"><div class="stage-title"><span class="dot">${i+1}</span><div><h3>${s.title}</h3></div></div><div class="docs">${s.docs.map(d=>`<div class="doc"><span class="kind">${d[0]}</span><span>${d[1]}</span><span class="amount ${cls(d[2])}">${d[2]}</span></div>`).join('')}</div><div class="balance">${s.balances.map(b=>`<span>${b[0]}</span><span class="${cls(b[1])}">${b[1]}</span>`).join('')}</div>${s.formula?`<div class="formula">${s.formula}</div>`:''}</article><article class="card"><h3>Movimientos relevantes del Ledger</h3><table class="ledger"><thead><tr><th>Documento</th><th>Afecta a</th><th>Tipo</th><th>Importe</th></tr></thead><tbody>${s.ledger.map(r=>`<tr><td>${r[0]}</td><td>${r[1]}</td><td>${r[2]}</td><td class="${cls(r[3])}">${r[3]}</td></tr>`).join('')}</tbody></table><div class="explain">${s.note}</div></article>`}
+document.querySelectorAll('.scenario').forEach(section=>{render(section);section.querySelectorAll('[data-action]').forEach(btn=>btn.addEventListener('click',()=>{let i=Number(section.dataset.index);i+=btn.dataset.action==='next'?1:-1;section.dataset.index=String(Math.max(0,Math.min(scenarios[section.id].length-1,i)));render(section)}))});
+document.querySelectorAll('[data-tab]').forEach(tab=>tab.addEventListener('click',()=>{document.querySelectorAll('[data-tab]').forEach(t=>t.setAttribute('aria-selected',String(t===tab)));document.querySelectorAll('.scenario').forEach(s=>s.classList.toggle('active',s.id===tab.dataset.tab))}));
+</script>
+</body>
+</html>

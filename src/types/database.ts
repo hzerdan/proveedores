@@ -51,6 +51,8 @@ export interface Supplier {
   phone?: string;
   is_active: boolean;
   notes?: string;
+  strict_due_date_discount?: boolean;
+  discount_payment_note?: string | null;
   created_at: string;
 }
 
@@ -117,6 +119,8 @@ export interface SupplierContact {
   is_active?: boolean;
 }
 
+export type NumberingMode = 'EXTERNAL' | 'INTERNAL_SEQUENCE';
+
 export interface DocumentType {
   id: number;
   code: string;
@@ -128,8 +132,53 @@ export interface DocumentType {
   can_be_target_application: boolean;
   requires_due_date?: boolean;
   is_system_internal?: boolean;
+  numbering_mode?: NumberingMode;
   is_active: boolean;
 }
+
+export interface DocumentNumberingSeries {
+  id: number;
+  document_type_id: number;
+  point_of_sale: number;
+  letter?: string | null;
+  description?: string | null;
+  next_number: number | null;
+  is_active: boolean;
+  is_exhausted?: boolean;
+  exhausted_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  document_type?: DocumentType;
+}
+
+export interface DocumentNumberingSeriesAdjustment {
+  id: number;
+  series_id: number;
+  old_next_number: number;
+  new_next_number: number;
+  reason: string;
+  adjusted_by: number;
+  adjusted_at: string;
+  adjuster_name?: string;
+}
+
+export type FileRole = 'ORIGINAL' | 'AI_DERIVATIVE' | 'INVOICE' | 'RECEIPT' | 'CREDIT_NOTE' | 'PAYMENT_PROOF' | 'OTHER';
+
+export interface DocumentFile {
+  id: number;
+  document_id: number;
+  storage_path: string;
+  file_name: string;
+  file_size?: number;
+  mime_type?: string;
+  file_role: FileRole;
+  source_file_id?: number | null;
+  ai_extraction_id?: number | null;
+  created_by?: number;
+  created_at: string;
+}
+
+export type PunctualPaymentStatus = 'OVERDUE' | 'DUE_SOON' | 'ON_TIME' | 'NO_DUE_DATE';
 
 export interface Document {
   id: number;
@@ -142,6 +191,7 @@ export interface Document {
   document_number?: number;
   human_reference: string;
   external_reference?: string;
+  numbering_series_id?: number | null;
   issue_date: string;
   due_date?: string;
   currency: string;
@@ -230,6 +280,10 @@ export interface DocumentSummaryView {
   created_by: number;
   created_by_name: string;
   created_at: string;
+  numbering_series_id?: number | null;
+  files_count?: number;
+  strict_due_date_discount?: boolean;
+  discount_payment_note?: string | null;
 }
 
 export type DocumentBalanceView = DocumentSummaryView;
@@ -342,6 +396,10 @@ export interface SupplierAgingRow {
   free_credits_amount: number;
   total_pending_debt: number;
   net_total_balance: number;
+  strict_due_date_discount?: boolean;
+  discount_payment_note?: string | null;
+  min_due_date?: string | null;
+  has_no_due_date_docs?: boolean;
 }
 
 export interface PaymentProjectionRecord {
@@ -354,6 +412,10 @@ export interface PaymentProjectionRecord {
   week_end: string | null;
   amount: number;
   doc_count: number;
+  strict_due_date_discount?: boolean;
+  discount_payment_note?: string | null;
+  min_due_date?: string | null;
+  has_no_due_date_docs?: boolean;
 }
 
 export interface OpenDocumentDetail {
@@ -373,6 +435,9 @@ export interface OpenDocumentDetail {
   reference_balance: number;
   concept?: string;
   notes?: string;
+  files_count?: number;
+  strict_due_date_discount?: boolean;
+  discount_payment_note?: string | null;
 }
 
 export type DocumentSellerChangeType = 'HISTORICAL_ASSIGNMENT' | 'CORRECTION';

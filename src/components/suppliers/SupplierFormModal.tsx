@@ -18,7 +18,8 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
   onClose,
   onSaved,
 }) => {
-  const { profile } = useAuth();
+  const { profile, hasPermission } = useAuth();
+  const canManageSuppliers = hasPermission('suppliers.manage');
   const [code, setCode] = useState('');
   const [tradeName, setTradeName] = useState('');
   const [legalName, setLegalName] = useState('');
@@ -27,6 +28,8 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
   const [phone, setPhone] = useState('');
   const [notes, setNotes] = useState('');
   const [isActive, setIsActive] = useState(true);
+  const [strictDueDateDiscount, setStrictDueDateDiscount] = useState(false);
+  const [discountPaymentNote, setDiscountPaymentNote] = useState('');
 
   // Contacts
   const [contacts, setContacts] = useState<Partial<SupplierContact>[]>([]);
@@ -44,6 +47,8 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
       setPhone(supplier.phone || '');
       setNotes(supplier.notes || '');
       setIsActive(supplier.is_active);
+      setStrictDueDateDiscount(Boolean(supplier.strict_due_date_discount));
+      setDiscountPaymentNote(supplier.discount_payment_note || '');
       fetchContacts(supplier.id);
     } else {
       // Reset form
@@ -55,6 +60,8 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
       setPhone('');
       setNotes('');
       setIsActive(true);
+      setStrictDueDateDiscount(false);
+      setDiscountPaymentNote('');
       setContacts([]);
     }
     setActiveTab('DATA');
@@ -108,6 +115,8 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
             phone: phone.trim() || null,
             notes: notes.trim() || null,
             is_active: isActive,
+            strict_due_date_discount: strictDueDateDiscount,
+            discount_payment_note: discountPaymentNote.trim() || null,
             updated_at: new Date().toISOString(),
           })
           .eq('id', supplier.id);
@@ -126,6 +135,8 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
             phone: phone.trim() || null,
             notes: notes.trim() || null,
             is_active: isActive,
+            strict_due_date_discount: strictDueDateDiscount,
+            discount_payment_note: discountPaymentNote.trim() || null,
             created_by: profile.id,
           })
           .select()
@@ -327,6 +338,76 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
                 onChange={(e) => setPhone(e.target.value)}
                 className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500/50 focus:outline-none"
               />
+            </div>
+          </div>
+
+          {/* Punctual Payment Benefit Configuration (suppliers.manage) */}
+          <div className="p-4 bg-slate-800/40 border border-slate-700/60 rounded-2xl space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+                  Beneficio Condicionado al Pago Puntual (Informativo)
+                </h4>
+                <p className="text-[11px] text-slate-400">
+                  Advierte visualmente mediante badges en Aging y Proyección para asegurar pagos antes del vencimiento.
+                </p>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={strictDueDateDiscount}
+                  onChange={(e) => setStrictDueDateDiscount(e.target.checked)}
+                  disabled={!canManageSuppliers}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600 disabled:opacity-50"></div>
+              </label>
+            </div>
+
+            {strictDueDateDiscount && (
+              <div className="space-y-1.5 pt-2 border-t border-slate-700/50">
+                <label className="block text-[11px] font-semibold text-slate-300">
+                  Condición Particular o Detalle del Beneficio (Opcional)
+                </label>
+                <input
+                  type="text"
+                  placeholder="ej: Descuento 5% por pago antes del vencimiento acordado"
+                  value={discountPaymentNote}
+                  onChange={(e) => setDiscountPaymentNote(e.target.value)}
+                  disabled={!canManageSuppliers}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:ring-2 focus:ring-emerald-500 disabled:opacity-50"
+                />
+                <p className="text-[10px] text-slate-400 italic">
+                  * Este beneficio es estrictamente informativo y de gestión de tesorería; no altera cálculos automáticos, saldos ni asientos del Ledger.
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* Notes & Active status */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-center">
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                Observaciones Generales
+              </label>
+              <input
+                type="text"
+                placeholder="Notas internas sobre el proveedor..."
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500/50"
+              />
+            </div>
+            <div>
+              <label className="flex items-center space-x-2.5 cursor-pointer mt-5">
+                <input
+                  type="checkbox"
+                  checked={isActive}
+                  onChange={(e) => setIsActive(e.target.checked)}
+                  className="w-4 h-4 rounded text-sky-600 bg-slate-800 border-slate-700 focus:ring-sky-500"
+                />
+                <span className="text-xs text-slate-300 font-semibold">Proveedor Activo</span>
+              </label>
             </div>
           </div>
 

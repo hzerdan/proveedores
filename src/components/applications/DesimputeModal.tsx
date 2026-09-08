@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
 import { formatDate, formatMoney } from '../../lib/formatters';
+import { DocumentNumberingSeries, NumberingMode, DocumentType } from '../../types/database';
+import { SeriesSelector } from '../documents/SeriesSelector';
 import { X, Undo2, AlertCircle, ArrowDownRight } from 'lucide-react';
 
 interface DesimputeModalProps {
@@ -16,11 +18,29 @@ export const DesimputeModal: React.FC<DesimputeModalProps> = ({
   onClose,
   onSaved,
 }) => {
+  const [aplDocType, setAplDocType] = useState<DocumentType | null>(null);
+  const [selectedSeries, setSelectedSeries] = useState<DocumentNumberingSeries | null>(null);
+  const [numberingMode, setNumberingMode] = useState<NumberingMode>('INTERNAL_SEQUENCE');
+  const [seriesList, setSeriesList] = useState<DocumentNumberingSeries[]>([]);
   const [imputations, setImputations] = useState<any[]>([]);
   const [selectedMovementId, setSelectedMovementId] = useState<number | null>(null);
   const [reason, setReason] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    supabase
+      .from('document_types')
+      .select('*')
+      .eq('code', 'APL')
+      .single()
+      .then(({ data }) => {
+        if (data) {
+          setAplDocType(data as DocumentType);
+          setNumberingMode((data.numbering_mode as NumberingMode) || 'INTERNAL_SEQUENCE');
+        }
+      });
+  }, []);
 
   useEffect(() => {
     if (!supplierId || !isOpen) return;
@@ -66,6 +86,18 @@ export const DesimputeModal: React.FC<DesimputeModalProps> = ({
       return;
     }
 
+    // Numbering series validation (Desimputations share the APL series)
+    if (numberingMode === 'INTERNAL_SEQUENCE') {
+      if (seriesList.length === 0) {
+        setError('Bloqueado: No existen series activas configuradas para comprobantes APL. Configure una serie antes de desimputar.');
+        return;
+      }
+      if (seriesList.length > 1 && !selectedSeries) {
+        setError('Debe seleccionar obligatoriamente una serie activa para la desimputación.');
+        return;
+      }
+    }
+
     setLoading(true);
     setError(null);
 
@@ -73,6 +105,7 @@ export const DesimputeModal: React.FC<DesimputeModalProps> = ({
       const { error: rpcErr } = await supabase.rpc('rpc_reverse_imputation', {
         p_movement_id: selectedMovementId,
         p_reason: reason.trim(),
+        p_numbering_series_id: numberingMode === 'INTERNAL_SEQUENCE' ? (selectedSeries?.id || null) : null,
       });
 
       if (rpcErr) throw rpcErr;
@@ -183,6 +216,19 @@ export const DesimputeModal: React.FC<DesimputeModalProps> = ({
               <div className="text-slate-500 text-[10px] pt-1">Suma del APL Compensatorio: $0.00 (El saldo global del proveedor permanece idéntico).</div>
             </div>
           )}
+
+          {/* Series Selection for APL Desimputation */}
+          <div className="space-y-2">
+            <SeriesSelector
+              documentTypeId={aplDocType?.id || null}
+              selectedSeriesId={selectedSeries?.id || null}
+              onSelectSeries={setSelectedSeries}
+              onModeLoaded={(mode, sList) => {
+                setNumberingMode(mode);
+                setSeriesList(sList);
+              }}
+            />
+          </div>
 
           <div>
             <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { DocumentType } from '../../types/database';
+import { DocumentType, NumberingMode } from '../../types/database';
 import { useAuth } from '../../context/AuthContext';
 import {
   FileCode2,
@@ -12,7 +12,9 @@ import {
   Edit2,
   Power,
   Lock,
+  Hash,
 } from 'lucide-react';
+import { SeriesManagementModal } from './SeriesManagementModal';
 
 export const DocumentTypesMaster: React.FC = () => {
   const { hasPermission } = useAuth();
@@ -25,6 +27,7 @@ export const DocumentTypesMaster: React.FC = () => {
   // Modal State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingType, setEditingType] = useState<DocumentType | null>(null);
+  const [seriesModalType, setSeriesModalType] = useState<DocumentType | null>(null);
 
   // Form State
   const [code, setCode] = useState('');
@@ -35,6 +38,7 @@ export const DocumentTypesMaster: React.FC = () => {
   const [canBeSource, setCanBeSource] = useState(false);
   const [canBeTarget, setCanBeTarget] = useState(true);
   const [requiresDueDate, setRequiresDueDate] = useState(false);
+  const [numberingMode, setNumberingMode] = useState<NumberingMode>('EXTERNAL');
   const [isActive, setIsActive] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -70,6 +74,7 @@ export const DocumentTypesMaster: React.FC = () => {
     setCanBeSource(false);
     setCanBeTarget(true);
     setRequiresDueDate(false);
+    setNumberingMode('EXTERNAL');
     setIsActive(true);
     setError(null);
     setIsModalOpen(true);
@@ -85,6 +90,7 @@ export const DocumentTypesMaster: React.FC = () => {
     setCanBeSource(type.can_be_source_application);
     setCanBeTarget(type.can_be_target_application);
     setRequiresDueDate(Boolean(type.requires_due_date));
+    setNumberingMode(type.numbering_mode || 'EXTERNAL');
     setIsActive(type.is_active);
     setError(null);
     setIsModalOpen(true);
@@ -132,6 +138,7 @@ export const DocumentTypesMaster: React.FC = () => {
             can_be_source_application: canBeSource,
             can_be_target_application: canBeTarget,
             requires_due_date: requiresDueDate,
+            numbering_mode: numberingMode,
             is_active: isActive,
           })
           .eq('id', editingType.id);
@@ -149,6 +156,7 @@ export const DocumentTypesMaster: React.FC = () => {
           can_be_source_application: canBeSource,
           can_be_target_application: canBeTarget,
           requires_due_date: requiresDueDate,
+          numbering_mode: numberingMode,
           is_system_internal: false,
           is_active: isActive,
         });
@@ -260,6 +268,7 @@ export const DocumentTypesMaster: React.FC = () => {
                 <th className="px-6 py-4 text-center">Origen Imputación</th>
                 <th className="px-6 py-4 text-center">Destino Imputación</th>
                 <th className="px-6 py-4 text-center">Requiere Venc.</th>
+                <th className="px-6 py-4 text-center">Numeración</th>
                 <th className="px-6 py-4 text-center">Tipo</th>
                 <th className="px-6 py-4 text-center">Estado</th>
                 <th className="px-6 py-4 text-right">Acciones</th>
@@ -268,13 +277,13 @@ export const DocumentTypesMaster: React.FC = () => {
             <tbody className="divide-y divide-slate-800/60 font-normal">
               {loading ? (
                 <tr>
-                  <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
+                  <td colSpan={10} className="px-6 py-12 text-center text-slate-400">
                     Cargando catálogo de tipos de comprobantes...
                   </td>
                 </tr>
               ) : filteredDocTypes.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="px-6 py-12 text-center text-slate-400">
+                  <td colSpan={10} className="px-6 py-12 text-center text-slate-400">
                     No se encontraron tipos de comprobantes con los filtros seleccionados.
                   </td>
                 </tr>
@@ -363,6 +372,18 @@ export const DocumentTypesMaster: React.FC = () => {
                     </td>
 
                     <td className="px-6 py-4 text-center">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded text-[10px] font-semibold ${
+                          type.numbering_mode === 'INTERNAL_SEQUENCE'
+                            ? 'bg-sky-500/10 text-sky-400 border border-sky-500/20 font-mono'
+                            : 'bg-slate-800 text-slate-400 border border-slate-700'
+                        }`}
+                      >
+                        {type.numbering_mode === 'INTERNAL_SEQUENCE' ? 'AUTOSECUENCIA' : 'EXTERNA'}
+                      </span>
+                    </td>
+
+                    <td className="px-6 py-4 text-center">
                       <span className="text-[10px] font-mono text-slate-400">
                         {type.is_system_internal ? 'Sistema' : 'Personalizado'}
                       </span>
@@ -382,6 +403,13 @@ export const DocumentTypesMaster: React.FC = () => {
 
                     <td className="px-6 py-4 text-right">
                       <div className="flex items-center justify-end space-x-1.5">
+                        <button
+                          onClick={() => setSeriesModalType(type)}
+                          title="Administrar series correlativas de numeración"
+                          className="p-1.5 rounded-lg bg-slate-800 hover:bg-sky-950/50 text-sky-400 hover:text-sky-300 transition-colors"
+                        >
+                          <Hash className="w-3.5 h-3.5" />
+                        </button>
                         <button
                           onClick={() => handleOpenEdit(type)}
                           title="Editar tipo de comprobante"
@@ -546,6 +574,44 @@ export const DocumentTypesMaster: React.FC = () => {
                 </div>
               </div>
 
+              {/* Numbering Mode */}
+              <div className="pt-2 border-t border-slate-800">
+                <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
+                  Modo de Numeración Documental *
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setNumberingMode('EXTERNAL')}
+                    className={`p-2.5 rounded-xl border text-left font-bold text-xs transition-all ${
+                      numberingMode === 'EXTERNAL'
+                        ? 'bg-slate-700/80 border-slate-400 text-white shadow-md'
+                        : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-700'
+                    }`}
+                  >
+                    EXTERNA / MANUAL
+                    <span className="block text-[10px] font-normal text-slate-400 mt-0.5">
+                      El operador carga Punto de Venta y Número físico emitido por el proveedor.
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setNumberingMode('INTERNAL_SEQUENCE')}
+                    className={`p-2.5 rounded-xl border text-left font-bold text-xs transition-all ${
+                      numberingMode === 'INTERNAL_SEQUENCE'
+                        ? 'bg-sky-500/20 border-sky-500 text-sky-300 shadow-md shadow-sky-950/40'
+                        : 'bg-slate-800/80 border-slate-700 text-slate-400 hover:bg-slate-700'
+                    }`}
+                  >
+                    AUTONUMERACIÓN CORRELATIVA
+                    <span className="block text-[10px] font-normal text-slate-400 mt-0.5">
+                      El sistema asigna e incrementa de forma atómica la serie activa al confirmar.
+                    </span>
+                  </button>
+                </div>
+              </div>
+
               {/* Behavior Checkboxes */}
               <div className="space-y-2.5 pt-2 border-t border-slate-800">
                 <label className="flex items-center space-x-2.5 cursor-pointer">
@@ -621,6 +687,16 @@ export const DocumentTypesMaster: React.FC = () => {
             </form>
           </div>
         </div>
+      )}
+
+      {/* Series Management Modal */}
+      {seriesModalType && (
+        <SeriesManagementModal
+          isOpen={Boolean(seriesModalType)}
+          onClose={() => setSeriesModalType(null)}
+          documentType={seriesModalType}
+          onSeriesChanged={fetchDocTypes}
+        />
       )}
     </div>
   );

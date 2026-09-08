@@ -60,17 +60,33 @@ const JSON_SCHEMA_INVOICE_V2 = {
             type: ["string", "null"],
             description: "Fecha de emisión en formato YYYY-MM-DD",
           },
+          invoice_date: {
+            type: ["string", "null"],
+            description: "Fecha de emisión del comprobante en formato YYYY-MM-DD",
+          },
           printed_due_date: {
             type: ["string", "null"],
-            description: "Fecha de vencimiento impresa literal en el comprobante en formato YYYY-MM-DD (null si no está explícitamente escrita)",
+            description: "Fecha de vencimiento comercial de pago impresa literal en el comprobante en formato YYYY-MM-DD (null si no figura explícitamente escrita). CRÍTICO: NUNCA usar la fecha del Vencimiento CAE.",
+          },
+          due_date: {
+            type: ["string", "null"],
+            description: "Fecha de vencimiento comercial para el pago en formato YYYY-MM-DD. NUNCA utilizar la fecha del Vencimiento CAE.",
           },
           payment_condition_text: {
             type: ["string", "null"],
-            description: "Texto literal de la condición de venta/pago (ej: '30 días f.f.', 'Contado', 'Cta Cte 60 días')",
+            description: "Texto literal de la condición de venta/pago (ej: '30 días fecha factura', 'Contado', 'Cta Cte 60 días')",
+          },
+          payment_terms_text: {
+            type: ["string", "null"],
+            description: "Texto literal de la condición de venta o plazo comercial (ej: '30 días fecha factura')",
           },
           payment_term_days: {
             type: ["number", "null"],
             description: "Cantidad de días de plazo de pago deducida del texto (ej: 30 para '30 días', 0 para contado)",
+          },
+          payment_terms_days: {
+            type: ["number", "null"],
+            description: "Cantidad de días de plazo de pago comercial (ej: 30 para '30 días', null si no especifica días)",
           },
           payment_term_basis: {
             type: ["string", "null"],
@@ -100,7 +116,16 @@ const JSON_SCHEMA_INVOICE_V2 = {
           },
           cae_due_date: {
             type: ["string", "null"],
-            description: "Fecha de vencimiento del CAE en formato YYYY-MM-DD",
+            description: "Fecha de vencimiento del CAE otorgada por AFIP en formato YYYY-MM-DD. Dato exclusivamente fiscal.",
+          },
+          cae_expiration_date: {
+            type: ["string", "null"],
+            description: "Fecha de vencimiento del CAE otorgada por AFIP en formato YYYY-MM-DD. NUNCA transferir a due_date.",
+          },
+          due_date_source: {
+            type: ["string", "null"],
+            enum: ["EXPLICIT_PRINTED", "CALCULATED_FROM_PAYMENT_TERMS", "MANUAL_REQUIRED", null],
+            description: "Origen del vencimiento comercial (EXPLICIT_PRINTED si está explícito impreso, CALCULATED_FROM_PAYMENT_TERMS si se calcula por días desde emisión, MANUAL_REQUIRED si no se puede determinar)",
           },
           concept: {
             type: ["string", "null"],
@@ -109,10 +134,11 @@ const JSON_SCHEMA_INVOICE_V2 = {
         },
         required: [
           "type_code", "letter", "point_of_sale", "document_number",
-          "issue_date", "printed_due_date", "payment_condition_text",
-          "payment_term_days", "payment_term_basis", "currency",
-          "net_amount", "tax_amount", "total_amount", "cae",
-          "cae_due_date", "concept"
+          "issue_date", "invoice_date", "printed_due_date", "due_date",
+          "payment_condition_text", "payment_terms_text",
+          "payment_term_days", "payment_terms_days", "payment_term_basis",
+          "currency", "net_amount", "tax_amount", "total_amount", "cae",
+          "cae_due_date", "cae_expiration_date", "due_date_source", "concept"
         ],
         additionalProperties: false,
       },
@@ -195,6 +221,113 @@ function parseDateParts(dateStr: string | null | undefined): { day: number; mont
 
 function isValidCanonicalDate(dateStr: string | null | undefined): boolean {
   return parseDateParts(dateStr) !== null;
+}
+
+function formatIsoDate(parsed: { day: number; month: number; year: number } | null): string | null {
+  if (!parsed) return null;
+  const mm = String(parsed.month).padStart(2, "0");
+  const dd = String(parsed.day).padStart(2, "0");
+  return `${parsed.year}-${mm}-${dd}`;
+}
+
+function addDaysToIsoDate(isoDate: string | null, days: number | null): string | null {
+  if (!isoDate || days === null || days === undefined || isNaN(days) || days < 0) return null;
+  const p = parseDateParts(isoDate);
+  if (!p) return null;
+  const dt = new Date(Date.UTC(p.year, p.month - 1, p.day));
+  dt.setUTCDate(dt.getUTCDate() + days);
+  return formatIsoDate({
+    year: dt.getUTCFullYear(),
+    month: dt.getUTCMonth() + 1,
+    day: dt.getUTCDate(),
+  });
+}
+
+function normalizeInvoiceDatesAndTerms(extractedData: any): void {
+  if (!extractedData || !extractedData.document) return;
+  const doc = extractedData.document;
+  if (!Array.isArray(extractedData.warnings)) extractedData.warnings = [];
+
+  // 1. Fechas de emisión
+  const rawIssue = doc.invoice_date || doc.issue_date;
+  const pIssue = parseDateParts(rawIssue);
+  const issueIso = formatIsoDate(pIssue);
+  doc.invoice_date = issueIso;
+  doc.issue_date = issueIso;
+
+  // 2. Fechas de CAE (dato puramente fiscal de AFIP)
+  const rawCae = doc.cae_expiration_date || doc.cae_due_date;
+  const pCae = parseDateParts(rawCae);
+  const caeIso = formatIsoDate(pCae);
+  doc.cae_expiration_date = caeIso;
+  doc.cae_due_date = caeIso;
+
+  // 3. Vencimiento comercial impreso
+  const rawPrinted = doc.printed_due_date;
+  const pPrinted = parseDateParts(rawPrinted);
+  let printedIso = formatIsoDate(pPrinted);
+
+  // 4. Validación determinística: Rechazar Vencimiento CAE como vencimiento comercial
+  if (printedIso && caeIso && printedIso === caeIso) {
+    extractedData.warnings.push(
+      `La fecha impresa ${printedIso} coincide con el Vencimiento CAE fiscal (AFIP) y fue descartada como vencimiento comercial de pago.`
+    );
+    printedIso = null;
+    doc.printed_due_date = null;
+  } else {
+    doc.printed_due_date = printedIso;
+  }
+
+  // 5. Condición comercial y días
+  const condText = doc.payment_terms_text || doc.payment_condition_text || null;
+  doc.payment_terms_text = condText;
+  doc.payment_condition_text = condText;
+
+  let termDays: number | null = doc.payment_terms_days !== undefined && doc.payment_terms_days !== null
+    ? doc.payment_terms_days
+    : (doc.payment_term_days !== undefined && doc.payment_term_days !== null ? doc.payment_term_days : null);
+
+  if (termDays === null && condText) {
+    const match = condText.match(/(\d+)\s*d[ií]as/i);
+    if (match) {
+      termDays = parseInt(match[1], 10);
+    }
+  }
+  doc.payment_terms_days = termDays;
+  doc.payment_term_days = termDays;
+
+  // 6. Precedencia estricta para determinar due_date comercial:
+  //    1. Vencimiento comercial explícitamente impreso (no CAE)
+  //    2. Cálculo desde una condición comercial inequívoca (ej: 30 días fecha factura)
+  //    3. Ingreso manual cuando no pueda determinarse
+  let finalDueDate: string | null;
+  let dueDateSource: "EXPLICIT_PRINTED" | "CALCULATED_FROM_PAYMENT_TERMS" | "MANUAL_REQUIRED";
+
+  const isIssueBasis =
+    doc.payment_term_basis === "ISSUE_DATE" ||
+    (condText && /fecha\s*factura|f\.?f\.?|emisi[oó]n|d[ií]as/i.test(condText)) ||
+    (!doc.payment_term_basis && termDays !== null && termDays > 0);
+
+  if (printedIso) {
+    finalDueDate = printedIso;
+    dueDateSource = "EXPLICIT_PRINTED";
+  } else if (termDays !== null && termDays > 0 && issueIso && isIssueBasis) {
+    finalDueDate = addDaysToIsoDate(issueIso, termDays);
+    dueDateSource = "CALCULATED_FROM_PAYMENT_TERMS";
+  } else {
+    finalDueDate = null;
+    dueDateSource = "MANUAL_REQUIRED";
+  }
+
+  // 7. Salvaguarda absoluta: Nunca usar cae_expiration_date como due_date
+  if (finalDueDate && caeIso && finalDueDate === caeIso && dueDateSource !== "CALCULATED_FROM_PAYMENT_TERMS") {
+    extractedData.warnings.push("Se impidió que la fecha del Vencimiento CAE fiscal fuera propuesta como vencimiento comercial de pago.");
+    finalDueDate = null;
+    dueDateSource = "MANUAL_REQUIRED";
+  }
+
+  doc.due_date = finalDueDate;
+  doc.due_date_source = dueDateSource;
 }
 
 function evaluateExtractionStatus(data: any): {
@@ -478,9 +611,13 @@ serve(async (req) => {
           type: "text",
           text: `Extrae la información fiscal del comprobante argentino adjunto (${file_name || "documento.pdf"}).
 - Preserva el punto de venta y número con sus ceros a la izquierda (como cadenas de texto).
-- Extrae la fecha de emisión y la fecha de vencimiento impresa literal si figura en el documento.
-- Si hay condición de venta (ej: "30 días"), extrae el texto literal, plazo en días y base.
-- Si no figura vencimiento explícito, printed_due_date debe ser null.`,
+- Extrae la fecha de emisión en invoice_date e issue_date (formato YYYY-MM-DD).
+- DISTINCIÓN CRÍTICA DE VENCIMIENTOS:
+  * 'Vencimiento CAE' (o 'Vto. CAE') es un dato exclusivamente fiscal de AFIP. Extráelo únicamente en cae_expiration_date y cae_due_date. NUNCA lo interpretes ni lo asignes como vencimiento comercial de pago (due_date ni printed_due_date).
+  * Si el comprobante NO tiene un vencimiento de pago comercial explícitamente impreso (como 'Vencimiento:', 'Vto. Pago:'), printed_due_date debe ser null.
+  * Si figura una condición de venta comercial (ej: '30 días fecha factura'), extrae el texto en payment_terms_text / payment_condition_text, los días en payment_terms_days / payment_term_days (30) y la base 'ISSUE_DATE'.
+  * Para condiciones como '30 días fecha factura', calcula el vencimiento en due_date sumando los días a la fecha de emisión y establece due_date_source en 'CALCULATED_FROM_PAYMENT_TERMS'.
+  * Si no figura vencimiento explícito ni condición determinable, due_date debe ser null y due_date_source 'MANUAL_REQUIRED'.`,
         },
         {
           type: "file",
@@ -505,8 +642,11 @@ serve(async (req) => {
           type: "text",
           text: `Extrae la información fiscal del comprobante adjunto (${file_name || "foto.jpg"}).
 - Preserva punto de venta y número como strings con ceros a la izquierda.
-- Extrae fecha de emisión, fecha de vencimiento impresa (si existe), condición de pago literal y plazo en días.
-- Si la imagen está orientada o rotada, lee cuidadosamente todos los números y encabezados fiscales.`,
+- Extrae fecha de emisión en invoice_date e issue_date (YYYY-MM-DD).
+- DISTINCIÓN CRÍTICA DE VENCIMIENTOS:
+  * 'Vencimiento CAE' (o 'Vto. CAE') es un dato puramente fiscal de AFIP. Extráelo en cae_expiration_date y cae_due_date. NUNCA lo coloques en due_date ni printed_due_date.
+  * Si no hay vencimiento comercial de pago impreso, printed_due_date es null.
+  * Si figura condición comercial (ej: '30 días fecha factura'), extrae texto y días, y calcula due_date sumando los días a la emisión (due_date_source: 'CALCULATED_FROM_PAYMENT_TERMS').`,
         },
         {
           type: "image_url",
@@ -530,7 +670,7 @@ serve(async (req) => {
         messages: [
           {
             role: "system",
-            content: "Eres un asistente contable senior especializado en comprobantes fiscales de Argentina (AFIP). Extrae con máxima precisión las evidencias fiscales según el esquema estricto. La IA solo extrae evidencias, no inventa datos ni asume vencimientos que no figuren impresos.",
+            content: "Eres un asistente contable senior especializado en comprobantes fiscales de Argentina (AFIP). Extrae con máxima precisión las evidencias fiscales según el esquema estricto. REGLA FUNDAMENTAL DE FECHAS: El 'Vencimiento CAE' es una fecha regulatoria de AFIP y NUNCA es la fecha de vencimiento de pago del comprobante. Extrae 'Vencimiento CAE' exclusivamente en cae_expiration_date / cae_due_date. Si el documento indica '30 días fecha factura' y tiene 'Vencimiento CAE: 14-09-2026', el Vencimiento CAE es cae_expiration_date, y el vencimiento de pago se calcula determinísticamente a 30 días de la emisión.",
           },
           {
             role: "user",
@@ -554,6 +694,9 @@ serve(async (req) => {
     const structuredText = openAiJson.choices?.[0]?.message?.content;
     const extractedData = JSON.parse(structuredText);
     const durationMs = Date.now() - startTime;
+
+    // Normalización determinística de fechas y términos en backend
+    normalizeInvoiceDatesAndTerms(extractedData);
 
     // Clasificación determinística del estado (SUCCESS vs PARTIAL)
     const { status: extractionStatus, reasons: statusReasons, structured_reasons: structuredReasons } = evaluateExtractionStatus(extractedData);

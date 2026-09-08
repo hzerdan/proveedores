@@ -2,6 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
 import { OpenDocumentDetail } from '../../types/database';
 import { formatDate, formatMoney } from '../../lib/formatters';
+import { PunctualPaymentBadge } from '../common/PunctualPaymentBadge';
+import { calculatePunctualPaymentStatus } from '../../lib/punctualPayment';
+import { DocumentFileAttachmentIndicator } from '../documents/DocumentFileAttachmentIndicator';
+import { DocumentViewerModal } from '../documents/DocumentViewerModal';
 import { X, FileText } from 'lucide-react';
 
 interface BucketDetailModalProps {
@@ -39,6 +43,7 @@ export const BucketDetailModal: React.FC<BucketDetailModalProps> = ({
 }) => {
   const [documents, setDocuments] = useState<OpenDocumentDetail[]>([]);
   const [loading, setLoading] = useState(false);
+  const [selectedViewerDoc, setSelectedViewerDoc] = useState<{ id: number; ref: string } | null>(null);
 
   useEffect(() => {
     if (!isOpen || (!supplierId && !sellerId)) return;
@@ -154,45 +159,72 @@ export const BucketDetailModal: React.FC<BucketDetailModalProps> = ({
                     <th className="px-4 py-2.5 whitespace-nowrap">Tipo</th>
                     <th className="px-4 py-2.5 whitespace-nowrap">Emisión</th>
                     <th className="px-4 py-2.5 whitespace-nowrap">Vencimiento</th>
+                    <th className="px-4 py-2.5 whitespace-nowrap">Beneficio Pago</th>
                     <th className="px-4 py-2.5 text-right whitespace-nowrap">Importe Total</th>
                     <th className="px-4 py-2.5 text-right whitespace-nowrap">Saldo Pendiente</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-800/60 font-mono text-[11px]">
-                  {documents.map((doc) => (
-                    <tr key={doc.document_id} className="hover:bg-slate-800/30 transition-colors">
-                      <td className="px-4 py-3 text-slate-500 font-bold">#{doc.document_id}</td>
-                      <td className="px-4 py-3">
-                        <div className="font-bold text-white whitespace-nowrap">{doc.human_reference}</div>
-                        {doc.concept && <div className="text-[10px] text-slate-400 font-sans truncate max-w-xs">{doc.concept}</div>}
-                      </td>
-                      <td className="px-4 py-3 font-sans whitespace-nowrap">
-                        <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 border border-slate-700 text-slate-300 font-semibold">
-                          {doc.document_type_name}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 font-sans text-slate-300 whitespace-nowrap">
-                        {formatDate(doc.issue_date)}
-                      </td>
-                      <td className="px-4 py-3 font-sans whitespace-nowrap">
-                        {doc.due_date ? (
-                          <span className={doc.due_date < cutoffDate ? 'text-rose-400 font-bold' : 'text-slate-300'}>
-                            {formatDate(doc.due_date)}
+                  {documents.map((doc) => {
+                    const punctualStatus = doc.strict_due_date_discount
+                      ? calculatePunctualPaymentStatus(doc.due_date, cutoffDate)
+                      : null;
+
+                    return (
+                      <tr key={doc.document_id} className="hover:bg-slate-800/30 transition-colors">
+                        <td className="px-4 py-3 text-slate-500 font-bold">#{doc.document_id}</td>
+                        <td className="px-4 py-3">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-white whitespace-nowrap">{doc.human_reference}</span>
+                            {doc.files_count !== undefined && doc.files_count > 0 && (
+                              <DocumentFileAttachmentIndicator
+                                filesCount={doc.files_count}
+                                onClick={() => setSelectedViewerDoc({ id: doc.document_id, ref: doc.human_reference })}
+                              />
+                            )}
+                          </div>
+                          {doc.concept && <div className="text-[10px] text-slate-400 font-sans truncate max-w-xs">{doc.concept}</div>}
+                        </td>
+                        <td className="px-4 py-3 font-sans whitespace-nowrap">
+                          <span className="px-2 py-0.5 rounded text-[10px] bg-slate-800 border border-slate-700 text-slate-300 font-semibold">
+                            {doc.document_type_name}
                           </span>
-                        ) : (
-                          <span className="text-amber-400 italic">Sin Vto</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-right text-slate-300 font-bold whitespace-nowrap">
-                        {formatMoney(doc.total_amount)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-bold whitespace-nowrap">
-                        <span className={doc.reference_balance < 0 ? 'text-emerald-400' : 'text-rose-400'}>
-                          {doc.reference_balance < 0 ? `-${formatMoney(Math.abs(doc.reference_balance))}` : `+${formatMoney(doc.reference_balance)}`}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-4 py-3 font-sans text-slate-300 whitespace-nowrap">
+                          {formatDate(doc.issue_date)}
+                        </td>
+                        <td className="px-4 py-3 font-sans whitespace-nowrap">
+                          {doc.due_date ? (
+                            <span className={doc.due_date < cutoffDate ? 'text-rose-400 font-bold' : 'text-slate-300'}>
+                              {formatDate(doc.due_date)}
+                            </span>
+                          ) : (
+                            <span className="text-amber-400 italic">Sin Vto</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 font-sans whitespace-nowrap">
+                          {punctualStatus ? (
+                            <PunctualPaymentBadge
+                              status={punctualStatus}
+                              size="sm"
+                              note={doc.discount_payment_note || undefined}
+                            />
+                          ) : (
+                            <span className="text-slate-600 text-[10px]">-</span>
+                          )}
+                        </td>
+
+                        <td className="px-4 py-3 text-right text-slate-300 font-bold whitespace-nowrap">
+                          {formatMoney(doc.total_amount)}
+                        </td>
+                        <td className="px-4 py-3 text-right font-bold whitespace-nowrap">
+                          <span className={doc.reference_balance < 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                            {doc.reference_balance < 0 ? `-${formatMoney(Math.abs(doc.reference_balance))}` : `+${formatMoney(doc.reference_balance)}`}
+                          </span>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -209,6 +241,16 @@ export const BucketDetailModal: React.FC<BucketDetailModalProps> = ({
           </button>
         </div>
       </div>
+
+      {selectedViewerDoc && (
+        <DocumentViewerModal
+          isOpen={true}
+          onClose={() => setSelectedViewerDoc(null)}
+          documentId={selectedViewerDoc.id}
+          humanReference={selectedViewerDoc.ref}
+        />
+      )}
     </div>
+
   );
 };

@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Supplier, DocumentType, IntakeSource } from '../../types/database';
+import { Supplier, DocumentType, IntakeSource, DocumentNumberingSeries, NumberingMode } from '../../types/database';
 import { DuplicateWarningModal } from './DuplicateWarningModal';
 import { SupplierQuickCreateModal } from '../suppliers/SupplierQuickCreateModal';
 import { ExtractedInvoicePayload } from '../../lib/aiExtractor';
-import { cleanCuit } from '../../lib/cuitValidator';
-import { parseCanonicalDate, toIsoDate } from '../../lib/formatters';
+import { cleanCuit, isValidCuit } from '../../lib/cuitValidator';
+import { parseCanonicalDate, toIsoDate, formatDate } from '../../lib/formatters';
+import { SeriesSelector } from './SeriesSelector';
 import {
   X,
   FilePlus,
@@ -62,6 +63,11 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
   const [effectiveExtractionId, setEffectiveExtractionId] = useState<number | null>(null);
   const [dueDateSelectionSource, setDueDateSelectionSource] = useState<'PRINTED' | 'CALCULATED' | 'MANUAL'>('MANUAL');
   const [manualReason, setManualReason] = useState<string>('');
+
+  // Numbering Mode & Series State
+  const [selectedSeries, setSelectedSeries] = useState<DocumentNumberingSeries | null>(null);
+  const [numberingMode, setNumberingMode] = useState<NumberingMode>('EXTERNAL');
+  const [seriesList, setSeriesList] = useState<DocumentNumberingSeries[]>([]);
 
   // UI States
   const [loading, setLoading] = useState(false);
@@ -170,27 +176,31 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
     if (initialData.document) {
       const doc = initialData.document;
       if (doc.letter) setLetter(doc.letter);
-      if (doc.point_of_sale) setPointOfSale(doc.point_of_sale.padStart(4, '0'));
-      if (doc.document_number) setDocumentNumber(doc.document_number);
+      if (doc.point_of_sale) {
+        const p = parseInt(doc.point_of_sale, 10);
+        setPointOfSale(!isNaN(p) && p <= 99999 ? p.toString().padStart(4, '0') : doc.point_of_sale.padStart(4, '0'));
+      }
+      if (doc.document_number) {
+        const n = parseInt(doc.document_number, 10);
+        setDocumentNumber(!isNaN(n) && n <= 99999999 ? n.toString().padStart(8, '0') : doc.document_number);
+      }
       
-      const isoIssue = doc.issue_date_iso || toIsoDate(parseCanonicalDate(doc.issue_date));
+      const isoIssue = doc.invoice_date || doc.issue_date_iso || toIsoDate(parseCanonicalDate(doc.issue_date));
       if (isoIssue) setIssueDate(isoIssue);
 
-      const isoPrintedDue = doc.printed_due_date_iso || toIsoDate(parseCanonicalDate(doc.printed_due_date));
-      const isoCalcDue = doc.calculated_due_date_iso || toIsoDate(parseCanonicalDate(doc.calculated_due_date));
-
-      if (isoPrintedDue) {
-        setDueDate(isoPrintedDue);
+      // Precedencia estricta para inicializar la fecha de vencimiento comercial
+      if (doc.due_date_source === 'EXPLICIT_PRINTED' && doc.due_date) {
+        setDueDate(doc.due_date);
         setDueDateSelectionSource('PRINTED');
-      } else if (isoCalcDue) {
-        setDueDate(isoCalcDue);
+      } else if (doc.due_date_source === 'CALCULATED_FROM_PAYMENT_TERMS' && doc.due_date) {
+        setDueDate(doc.due_date);
         setDueDateSelectionSource('CALCULATED');
       } else if (doc.due_date) {
-        const legacyIso = toIsoDate(parseCanonicalDate(doc.due_date));
-        if (legacyIso) {
-          setDueDate(legacyIso);
-          setDueDateSelectionSource('PRINTED');
-        }
+        setDueDate(doc.due_date);
+        setDueDateSelectionSource(doc.printed_due_date ? 'PRINTED' : 'CALCULATED');
+      } else {
+        setDueDate('');
+        setDueDateSelectionSource('MANUAL');
       }
 
       if (doc.currency) setCurrency(doc.currency);
@@ -268,10 +278,19 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
       return;
     }
 
-    // Validación estricta de motivo si el vencimiento es MANUAL
-    if (dueDateSelectionSource === 'MANUAL' && dueDate) {
-      if (!manualReason || manualReason.trim().length < 3) {
-        setError('La selección manual de la fecha de vencimiento exige indicar un motivo de al menos 3 caracteres.');
+    // Validación de motivo manual ÚNICAMENTE cuando se sobreescribe una extracción de IA con discrepancias
+    const isAiDiscrepancyOverride = Boolean(
+      initialData?.document && (
+        initialData.document.due_date_inconsistency ||
+        (initialData.document.printed_due_date && initialData.document.calculated_due_date && initialData.document.printed_due_date !== initialData.document.calculated_due_date)
+      )
+    );
+
+    const effectiveManualReason = manualReason.trim() || notes.trim() || concept.trim();
+
+    if (isAiDiscrepancyOverride && dueDateSelectionSource === 'MANUAL' && dueDate) {
+      if (!effectiveManualReason || effectiveManualReason.length < 3) {
+        setError('La resolución manual sobre la discrepancia de vencimiento exige indicar un motivo (podés indicarlo en la tarjeta de discrepancia, en notas o en concepto).');
         return;
       }
     }
@@ -304,12 +323,21 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
           printed_due_date: initialData?.document?.printed_due_date_iso || toIsoDate(parseCanonicalDate(initialData?.document?.printed_due_date)) || null,
           calculated_due_date: initialData?.document?.calculated_due_date_iso || toIsoDate(parseCanonicalDate(initialData?.document?.calculated_due_date)) || null,
           payment_condition_text: initialData?.document?.payment_condition_text || null,
-          manual_reason: dueDateSelectionSource === 'MANUAL' ? manualReason.trim() : null,
+          manual_reason: dueDateSelectionSource === 'MANUAL' ? (effectiveManualReason || null) : null,
         },
         field_modifications: modifications,
       };
 
       // 1. Invocación atómica de rpc_create_and_confirm_document con auditoría server-side
+      if (numberingMode === 'INTERNAL_SEQUENCE') {
+        if (seriesList.length === 0) {
+          throw new Error('Bloqueado: No existen series de numeración activas para este tipo de comprobante. Configure una serie activa antes de confirmar.');
+        }
+        if (seriesList.length > 1 && !selectedSeries) {
+          throw new Error('Debe seleccionar obligatoriamente una serie activa para la autonumeración.');
+        }
+      }
+
       const { data: confirmRes, error: rpcErr } = await supabase.rpc(
         'rpc_create_and_confirm_document',
         {
@@ -317,9 +345,9 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
           p_document_type_id: Number(documentTypeId),
           p_seller_id: sellerId ? Number(sellerId) : null,
           p_letter: isFiscal ? letter : null,
-          p_point_of_sale: isFiscal && pointOfSale ? parseInt(pointOfSale, 10) : null,
-          p_document_number: isFiscal && documentNumber ? parseInt(documentNumber, 10) : null,
-          p_human_reference: currentHumanRef,
+          p_point_of_sale: numberingMode === 'INTERNAL_SEQUENCE' ? null : (isFiscal && pointOfSale ? parseInt(pointOfSale, 10) : null),
+          p_document_number: numberingMode === 'INTERNAL_SEQUENCE' ? null : (isFiscal && documentNumber ? parseInt(documentNumber, 10) : null),
+          p_human_reference: numberingMode === 'INTERNAL_SEQUENCE' ? null : currentHumanRef,
           p_issue_date: issueDate,
           p_due_date: dueDate || null,
           p_total_amount: numAmount,
@@ -330,6 +358,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
           p_ai_extraction_id: effectiveExtractionId,
           p_file_id: fileId || null,
           p_confirmed_payload_diff: confirmedDiff,
+          p_numbering_series_id: numberingMode === 'INTERNAL_SEQUENCE' ? (selectedSeries?.id || null) : null,
         }
       );
 
@@ -463,29 +492,82 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
             )}
 
             {/* Unrecognized Supplier Suggestion Banner */}
-            {unrecognizedSupplier && (
-              <div className="p-4 rounded-2xl bg-sky-950/40 border border-sky-500/30 text-sky-200 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
-                <div className="flex items-center space-x-2.5">
-                  <Building2 className="w-5 h-5 text-sky-400 shrink-0" />
-                  <div>
-                    <span className="text-[10px] uppercase font-bold text-sky-400 block">
-                      Proveedor no registrado por CUIT
-                    </span>
-                    <span className="font-bold text-white text-xs">
-                      {unrecognizedSupplier.name} (CUIT: {unrecognizedSupplier.taxId})
-                    </span>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setQuickCreateOpen(true)}
-                  className="px-3.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs flex items-center space-x-1.5 shadow-md shadow-sky-900/30 transition-all shrink-0"
+            {unrecognizedSupplier && (() => {
+              const isTaxIdValid = isValidCuit(unrecognizedSupplier.taxId);
+              return (
+                <div
+                  className={`p-4 rounded-2xl border transition-all flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-lg ${
+                    isTaxIdValid
+                      ? 'bg-sky-950/50 border-sky-500/40 text-sky-200 shadow-sky-950/40'
+                      : 'bg-amber-950/40 border-amber-500/60 text-amber-200 shadow-amber-950/30'
+                  }`}
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>Crear Proveedor</span>
-                </button>
-              </div>
-            )}
+                  <div className="flex items-start space-x-3">
+                    {isTaxIdValid ? (
+                      <Building2 className="w-5 h-5 text-sky-400 shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                    )}
+                    <div>
+                      <div className="flex items-center gap-2 mb-1">
+                        <span
+                          className={`text-[10px] uppercase font-bold tracking-wider block ${
+                            isTaxIdValid ? 'text-sky-400' : 'text-amber-400'
+                          }`}
+                        >
+                          {isTaxIdValid
+                            ? 'Proveedor no registrado por CUIT'
+                            : 'Proveedor no registrado — CUIT observado'}
+                        </span>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-white text-sm tracking-wide">
+                          {unrecognizedSupplier.name}
+                        </span>
+
+                        {isTaxIdValid ? (
+                          <span className="inline-flex items-center font-mono text-xs font-semibold px-2.5 py-0.5 rounded-lg bg-sky-900/70 border border-sky-400/40 text-sky-200 tracking-wider">
+                            CUIT: <span className="text-white ml-1.5 font-bold tracking-widest">{unrecognizedSupplier.taxId}</span>
+                          </span>
+                        ) : (
+                          <div className="inline-flex items-center gap-1.5 font-mono text-xs font-semibold px-2.5 py-0.5 rounded-lg bg-amber-900/70 border border-amber-500/80 text-amber-100 tracking-wider shadow-sm">
+                            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                            <span>CUIT:</span>
+                            <span className="text-white font-bold tracking-widest underline decoration-amber-400 decoration-wavy underline-offset-2">
+                              {unrecognizedSupplier.taxId}
+                            </span>
+                            <span className="ml-1 px-1.5 py-0.2 rounded bg-rose-950/90 text-rose-300 border border-rose-500/70 text-[10px] font-bold uppercase tracking-wider">
+                              Inválido Módulo 11
+                            </span>
+                          </div>
+                        )}
+                      </div>
+
+                      {!isTaxIdValid && (
+                        <p className="text-[11px] text-amber-300/90 mt-1.5 flex items-center gap-1.5 leading-snug">
+                          <AlertCircle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>
+                            El CUIT extraído no supera la validación matemática de AFIP. Podés corregirlo al crear o asignar el proveedor.
+                          </span>
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setQuickCreateOpen(true)}
+                    className={`px-4 py-2 rounded-xl font-bold text-xs flex items-center space-x-1.5 shadow-md transition-all shrink-0 active:scale-95 text-white ${
+                      isTaxIdValid
+                        ? 'bg-sky-600 hover:bg-sky-500 shadow-sky-900/40'
+                        : 'bg-amber-600 hover:bg-amber-500 shadow-amber-900/40'
+                    }`}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Crear Proveedor</span>
+                  </button>
+                </div>
+              );
+            })()}
 
             {/* Supplier Selector */}
             <div>
@@ -598,7 +680,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                 <select
                   value={documentTypeId}
                   onChange={(e) => setDocumentTypeId(Number(e.target.value))}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-medium"
+                  className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white font-medium text-sm focus:border-sky-500 transition-colors shadow-inner"
                 >
                   {docTypes.map((t) => (
                     <option key={t.id} value={t.id}>
@@ -608,42 +690,44 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                 </select>
               </div>
 
-              {isFiscal ? (
-                <>
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
-                      Letra / Tipo
-                    </label>
-                    <select
-                      value={letter}
-                      onChange={(e) => setLetter(e.target.value)}
-                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono font-bold text-center"
-                    >
-                      <option value="A">A</option>
-                      <option value="B">B</option>
-                      <option value="C">C</option>
-                      <option value="M">M</option>
-                      <option value="X">X</option>
-                    </select>
-                  </div>
+              {isFiscal && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
+                    Letra / Tipo
+                  </label>
+                  <select
+                    value={letter}
+                    onChange={(e) => setLetter(e.target.value)}
+                    className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3 py-2.5 text-white font-mono font-semibold text-base text-center focus:border-sky-500 transition-colors shadow-inner"
+                  >
+                    <option value="A">A</option>
+                    <option value="B">B</option>
+                    <option value="C">C</option>
+                    <option value="M">M</option>
+                    <option value="X">X</option>
+                  </select>
+                </div>
+              )}
 
-                  <div>
-                    <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
-                      Punto de Venta
-                    </label>
-                    <input
-                      type="text"
-                      maxLength={4}
-                      placeholder="0001"
-                      value={pointOfSale}
-                      onChange={(e) => setPointOfSale(e.target.value)}
-                      className={`w-full bg-slate-800 border rounded-xl px-3 py-2 text-white font-mono text-center ${
-                        isFieldUncertain('document.point_of_sale') ? 'border-amber-500/80' : 'border-slate-700'
-                      }`}
-                    />
-                  </div>
-                </>
-              ) : (
+              {numberingMode === 'EXTERNAL' && isFiscal && (
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
+                    Punto de Venta
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={4}
+                    placeholder="0001"
+                    value={pointOfSale}
+                    onChange={(e) => setPointOfSale(e.target.value)}
+                    className={`w-full bg-slate-800/90 border rounded-xl px-3.5 py-2.5 text-white font-mono font-semibold text-base tracking-widest text-center shadow-inner transition-colors ${
+                      isFieldUncertain('document.point_of_sale') ? 'border-amber-500/80 focus:border-amber-400' : 'border-slate-700 focus:border-sky-500'
+                    }`}
+                  />
+                </div>
+              )}
+
+              {numberingMode === 'EXTERNAL' && !isFiscal && (
                 <div className="sm:col-span-2">
                   <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
                     Referencia Personalizada
@@ -653,15 +737,29 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                     placeholder="Ej: REM-8910 o REC-2024-001"
                     value={customReference}
                     onChange={(e) => setCustomReference(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
+                    className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white font-mono font-medium text-sm tracking-wide shadow-inner focus:border-sky-500 transition-colors"
                   />
                 </div>
               )}
             </div>
 
+            {/* Series Selector when INTERNAL_SEQUENCE */}
+            <div className="space-y-3">
+              <SeriesSelector
+                documentTypeId={documentTypeId ? Number(documentTypeId) : null}
+                letter={isFiscal ? letter : null}
+                selectedSeriesId={selectedSeries?.id || null}
+                onSelectSeries={setSelectedSeries}
+                onModeLoaded={(mode, sList) => {
+                  setNumberingMode(mode);
+                  setSeriesList(sList);
+                }}
+              />
+            </div>
+
             {/* Document Number & Generated Reference Preview */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {isFiscal && (
+              {numberingMode === 'EXTERNAL' && isFiscal && (
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
                     Número de Comprobante *
@@ -672,30 +770,57 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                     placeholder="12345678"
                     value={documentNumber}
                     onChange={(e) => setDocumentNumber(e.target.value)}
-                    className={`w-full bg-slate-800 border rounded-xl px-3 py-2 text-white font-mono font-bold ${
-                      isFieldUncertain('document.document_number') ? 'border-amber-500/80' : 'border-slate-700'
+                    className={`w-full bg-slate-800/90 border rounded-xl px-3.5 py-2.5 text-white font-mono font-semibold text-base tracking-wider shadow-inner transition-colors ${
+                      isFieldUncertain('document.document_number') ? 'border-amber-500/80 focus:border-amber-400' : 'border-slate-700 focus:border-sky-500'
                     }`}
                   />
                 </div>
               )}
 
-              <div className={isFiscal ? '' : 'sm:col-span-2'}>
+              <div className={numberingMode === 'EXTERNAL' && isFiscal ? '' : 'sm:col-span-2'}>
                 <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                  Referencia Comercial Generada
+                  Referencia Comercial {numberingMode === 'INTERNAL_SEQUENCE' ? '(Estimada al Confirmar)' : 'Generada'}
                 </label>
-                <div className="bg-slate-950 border border-slate-800 rounded-xl px-3.5 py-2 font-mono font-bold text-sky-400">
-                  {currentHumanRef || '-'}
+                <div className="bg-slate-950/90 border border-sky-500/30 rounded-xl px-4 py-2.5 font-mono font-semibold text-sm tracking-wider text-sky-400 shadow-inner flex items-center min-h-[44px]">
+                  {numberingMode === 'INTERNAL_SEQUENCE'
+                    ? selectedSeries
+                      ? selectedSeries.next_number !== null
+                        ? `${selectedSeries.letter ? `${selectedSeries.letter}-` : ''}${selectedSeries.point_of_sale.toString().padStart(4, '0')}-${selectedSeries.next_number.toString().padStart(8, '0')} (Estimada)`
+                        : 'Serie agotada'
+                      : 'Se asignará correlativamente al confirmar'
+                    : currentHumanRef || '-'}
                 </div>
               </div>
             </div>
 
+            {/* Fiscal CAE Information Banner (Strictly Separated from Commercial Due Date) */}
+            {initialData?.document?.cae && (
+              <div className="flex flex-wrap items-center justify-between text-xs bg-slate-950/70 border border-slate-800 rounded-xl px-4 py-2.5 text-slate-400 gap-2">
+                <div className="flex items-center space-x-2">
+                  <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">CAE AFIP:</span>
+                  <span className="font-mono font-semibold tracking-wider text-sky-300">{initialData.document.cae}</span>
+                </div>
+                {initialData?.document?.cae_expiration_date && (
+                  <div className="flex items-center space-x-2">
+                    <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wider">Vto. CAE:</span>
+                    <span className="font-mono font-semibold tracking-wide text-slate-200">
+                      {formatDate(initialData.document.cae_expiration_date)}
+                    </span>
+                    <span className="text-[10px] text-slate-500 italic bg-slate-900 border border-slate-800 px-2 py-0.5 rounded-md">
+                      Dato fiscal regulatorio (No es vencimiento de pago)
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Due Date Decision Card if inconsistency exists or if both printed & calculated dates are present */}
-            {(initialData?.document?.due_date_inconsistency || (initialData?.document?.printed_due_date && initialData?.document?.calculated_due_date)) && (
+            {(initialData?.document?.due_date_inconsistency || (initialData?.document?.printed_due_date && initialData?.document?.calculated_due_date && initialData.document.printed_due_date !== initialData.document.calculated_due_date)) && (
               <div className="p-3.5 rounded-2xl bg-amber-950/40 border border-amber-500/50 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center space-x-2 text-amber-300 font-bold text-xs">
                     <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
-                    <span>Resolución de Fecha de Vencimiento</span>
+                    <span>Resolución de Fecha de Vencimiento Comercial</span>
                   </div>
                   <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-md bg-amber-500/20 text-amber-300">
                     Decisión del Operador
@@ -704,10 +829,10 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
 
                 <div className="text-[11px] text-amber-200/90 space-y-1">
                   {initialData?.document?.printed_due_date && (
-                    <div>• <strong>Fecha impresa en factura:</strong> {initialData.document.printed_due_date}</div>
+                    <div>• <strong>Fecha impresa en factura:</strong> {formatDate(initialData.document.printed_due_date)}</div>
                   )}
                   {initialData?.document?.calculated_due_date && (
-                    <div>• <strong>Fecha calculada según condición ({initialData.document.payment_condition_text || `${initialData.document.payment_term_days} días`}):</strong> {initialData.document.calculated_due_date}</div>
+                    <div>• <strong>Fecha calculada según condición ({initialData.document.payment_terms_text || initialData.document.payment_condition_text || `${initialData.document.payment_terms_days || initialData.document.payment_term_days} días`}):</strong> {formatDate(initialData.document.calculated_due_date)}</div>
                   )}
                 </div>
 
@@ -727,7 +852,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                           : 'bg-slate-800 text-amber-300 border-amber-500/30 hover:bg-slate-700'
                       }`}
                     >
-                      Usar Fecha Impresa ({initialData.document.printed_due_date})
+                      Usar Fecha Impresa ({formatDate(initialData.document.printed_due_date)})
                     </button>
                   )}
 
@@ -746,7 +871,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                           : 'bg-slate-800 text-sky-300 border-sky-500/30 hover:bg-slate-700'
                       }`}
                     >
-                      Usar Fecha Calculada ({initialData.document.calculated_due_date})
+                      Usar Fecha Calculada ({formatDate(initialData.document.calculated_due_date)})
                     </button>
                   )}
 
@@ -774,7 +899,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                       type="text"
                       value={manualReason}
                       onChange={(e) => setManualReason(e.target.value)}
-                      placeholder="Ej: Modificado según acuerdo telefónico con el proveedor..."
+                      placeholder="Ej: Modificado según acuerdo comercial con el proveedor..."
                       className="w-full bg-slate-900 border border-purple-500/50 rounded-xl px-3 py-1.5 text-white text-xs font-medium focus:ring-2 focus:ring-purple-500"
                     />
                   </div>
@@ -785,15 +910,22 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
             {/* Dates & Currency & Total Amount */}
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div>
-                <label className="block text-[11px] font-semibold text-slate-300 uppercase tracking-wider mb-1">
-                  Fecha Emisión *
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
+                    Fecha Emisión *
+                  </label>
+                  {issueDate && (
+                    <span className="text-[10px] font-mono text-sky-400">
+                      {formatDate(issueDate)}
+                    </span>
+                  )}
+                </div>
                 <input
                   type="date"
                   value={issueDate}
                   onChange={(e) => setIssueDate(e.target.value)}
                   required
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono"
+                  className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3.5 py-2.5 text-white font-mono text-sm tracking-wide shadow-inner focus:border-sky-500 transition-colors"
                 />
               </div>
 
@@ -802,9 +934,9 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                   <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
                     Fecha Vto. Pago
                   </label>
-                  {dueDateSelectionSource && (
-                    <span className="text-[9px] font-mono uppercase px-1.5 py-0.5 rounded bg-slate-700/60 text-slate-300">
-                      {dueDateSelectionSource}
+                  {dueDate && (
+                    <span className="text-[10px] font-mono text-sky-400">
+                      {formatDate(dueDate)}
                     </span>
                   )}
                 </div>
@@ -815,8 +947,8 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                     setDueDate(e.target.value);
                     setDueDateSelectionSource('MANUAL');
                   }}
-                  className={`w-full bg-slate-800 border rounded-xl px-3 py-2 text-white font-mono ${
-                    isFieldUncertain('document.due_date') ? 'border-amber-500/80' : 'border-slate-700'
+                  className={`w-full bg-slate-800/90 border rounded-xl px-3.5 py-2.5 text-white font-mono text-sm tracking-wide shadow-inner transition-colors ${
+                    isFieldUncertain('document.due_date') ? 'border-amber-500/80 focus:border-amber-400' : 'border-slate-700 focus:border-sky-500'
                   }`}
                 />
               </div>
@@ -828,7 +960,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                 <select
                   value={currency}
                   onChange={(e) => setCurrency(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono font-bold text-center"
+                  className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3 py-2.5 text-white font-mono font-semibold text-sm text-center shadow-inner focus:border-sky-500 transition-colors"
                 >
                   <option value="ARS">ARS ($)</option>
                   <option value="USD">USD (U$S)</option>
@@ -848,10 +980,21 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                   value={totalAmount}
                   onChange={(e) => setTotalAmount(e.target.value)}
                   required
-                  className={`w-full bg-slate-800 border rounded-xl px-3 py-2 text-white font-mono font-bold text-right ${
-                    isFieldUncertain('document.total_amount') ? 'border-amber-500/80' : 'border-slate-700'
+                  className={`w-full bg-slate-800/90 border rounded-xl px-3.5 py-2.5 text-white font-mono font-semibold text-base text-right tracking-wide shadow-inner transition-colors ${
+                    isFieldUncertain('document.total_amount') ? 'border-amber-500/80 focus:border-amber-400' : 'border-slate-700 focus:border-sky-500'
                   }`}
                 />
+                {totalAmount && !isNaN(parseFloat(totalAmount)) && (
+                  <div className="flex items-center justify-end gap-1.5 mt-1.5 text-emerald-400 font-mono text-xs font-semibold tracking-wider">
+                    <span className="text-[10px] uppercase font-bold text-slate-400 tracking-normal font-sans">
+                      Formateado:
+                    </span>
+                    <span>
+                      {currency === 'USD' ? 'U$S' : currency === 'EUR' ? '€' : '$'}{' '}
+                      {parseFloat(totalAmount).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Supplier, DocumentSummaryView } from '../../types/database';
+import { Supplier, DocumentSummaryView, DocumentNumberingSeries, NumberingMode, DocumentType } from '../../types/database';
+import { SeriesSelector } from './SeriesSelector';
 import { formatDate, formatMoney } from '../../lib/formatters';
 import { X, Receipt, Check, AlertCircle } from 'lucide-react';
 
@@ -24,7 +25,11 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
 }) => {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [supplierId, setSupplierId] = useState<number | ''>(initialSupplierId || '');
-  const [pointOfSale, setPointOfSale] = useState('0001');
+  const [opDocType, setOpDocType] = useState<DocumentType | null>(null);
+  const [selectedSeries, setSelectedSeries] = useState<DocumentNumberingSeries | null>(null);
+  const [numberingMode, setNumberingMode] = useState<NumberingMode>('INTERNAL_SEQUENCE');
+  const [seriesList, setSeriesList] = useState<DocumentNumberingSeries[]>([]);
+  const [pointOfSale, setPointOfSale] = useState('0100');
   const [documentNumber, setDocumentNumber] = useState('');
   const [issueDate, setIssueDate] = useState(new Date().toISOString().split('T')[0]);
   const [totalAmount, setTotalAmount] = useState('');
@@ -43,6 +48,18 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
       .then(({ data }) => {
         if (data) setSuppliers(data);
       });
+
+    supabase
+      .from('document_types')
+      .select('*')
+      .eq('code', 'ORDEN_PAGO')
+      .single()
+      .then(({ data }) => {
+        if (data) {
+          setOpDocType(data as DocumentType);
+          setNumberingMode((data.numbering_mode as NumberingMode) || 'INTERNAL_SEQUENCE');
+        }
+      });
   }, []);
 
   useEffect(() => {
@@ -60,8 +77,8 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
         const { data, error: fetchErr } = await supabase
           .from('v_document_summary')
           .select('*')
-          .eq('supplier_id', supplierId)
           .eq('balance_nature', 'DEBIT')
+          .eq('supplier_id', supplierId)
           .gt('reference_balance', 0)
           .order('due_date', { ascending: true, nullsFirst: false })
           .order('issue_date', { ascending: true });
@@ -88,7 +105,7 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
 
   const totalImputed = targetItems.reduce((acc, curr) => {
     const num = parseFloat(curr.appliedAmount);
-    return acc + (isNaN(num) || num <= 0 ? 0 : num);
+    return acc + (isNaN(num) ? 0 : num);
   }, 0);
 
   const remainder = Math.max(0, numTotalAmount - totalImputed);
@@ -106,7 +123,9 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
     handleAmountChange(index, maxApplicable.toString());
   };
 
-  const humanRef = `OP ${pointOfSale.padStart(4, '0')}-${documentNumber ? documentNumber.padStart(8, '0') : '00000000'}`;
+  const padPos = (pointOfSale || '1').padStart(4, '0');
+  const padDoc = (documentNumber || '1').padStart(8, '0');
+  const humanRef = `OP-${padPos}-${padDoc}`;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -120,6 +139,18 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
     if (totalImputed > numTotalAmount) {
       setError(`El total a imputar (${formatMoney(totalImputed)}) supera el total de la Orden de Pago (${formatMoney(numTotalAmount)}).`);
       return;
+    }
+
+    // Numbering series validation
+    if (numberingMode === 'INTERNAL_SEQUENCE') {
+      if (seriesList.length === 0) {
+        setError('Bloqueado: No existen series activas configuradas para Órdenes de Pago. Configure una serie antes de emitir.');
+        return;
+      }
+      if (seriesList.length > 1 && !selectedSeries) {
+        setError('Debe seleccionar obligatoriamente una serie activa para la Orden de Pago.');
+        return;
+      }
     }
 
     setLoading(true);
@@ -149,14 +180,15 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
       const { error: rpcErr } = await supabase.rpc('rpc_create_and_confirm_op', {
         p_supplier_id: Number(supplierId),
         p_document_type_id: dtData.id,
-        p_point_of_sale: parseInt(pointOfSale, 10) || 1,
-        p_document_number: parseInt(documentNumber, 10) || Math.floor(Math.random() * 900000 + 100000),
-        p_human_reference: humanRef,
+        p_point_of_sale: numberingMode === 'INTERNAL_SEQUENCE' ? null : (parseInt(pointOfSale, 10) || 1),
+        p_document_number: numberingMode === 'INTERNAL_SEQUENCE' ? null : (parseInt(documentNumber, 10) || null),
+        p_human_reference: numberingMode === 'INTERNAL_SEQUENCE' ? null : humanRef,
         p_issue_date: issueDate,
         p_total_amount: numTotalAmount,
         p_concept: concept.trim() || null,
         p_notes: notes.trim() || null,
         p_imputations: validImputations,
+        p_numbering_series_id: numberingMode === 'INTERNAL_SEQUENCE' ? (selectedSeries?.id || null) : null,
       });
 
       if (rpcErr) throw rpcErr;
@@ -239,32 +271,49 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
             </div>
           </div>
 
-          {/* Numbering & Total Amount */}
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-800/30 p-3.5 rounded-xl border border-slate-700/40">
-            <div>
-              <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                Pto. Venta / POS
-              </label>
-              <input
-                type="number"
-                value={pointOfSale}
-                onChange={(e) => setPointOfSale(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono"
-              />
-            </div>
+          {/* Series Selection when INTERNAL_SEQUENCE */}
+          <div className="space-y-3">
+            <SeriesSelector
+              documentTypeId={opDocType?.id || null}
+              selectedSeriesId={selectedSeries?.id || null}
+              onSelectSeries={setSelectedSeries}
+              onModeLoaded={(mode, sList) => {
+                setNumberingMode(mode);
+                setSeriesList(sList);
+              }}
+            />
+          </div>
 
-            <div>
-              <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                Número de OP
-              </label>
-              <input
-                type="number"
-                placeholder="ej: 20001"
-                value={documentNumber}
-                onChange={(e) => setDocumentNumber(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono"
-              />
-            </div>
+          {/* Numbering & Total Amount */}
+          <div className={`grid gap-4 bg-slate-800/30 p-3.5 rounded-xl border border-slate-700/40 ${numberingMode === 'EXTERNAL' ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1'}`}>
+            {numberingMode === 'EXTERNAL' && (
+              <>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                    Pto. Venta / POS
+                  </label>
+                  <input
+                    type="number"
+                    value={pointOfSale}
+                    onChange={(e) => setPointOfSale(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                    Número de OP
+                  </label>
+                  <input
+                    type="number"
+                    placeholder="ej: 20001"
+                    value={documentNumber}
+                    onChange={(e) => setDocumentNumber(e.target.value)}
+                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono"
+                  />
+                </div>
+              </>
+            )}
 
             <div>
               <label className="block text-[10px] font-semibold text-emerald-400 uppercase tracking-wider mb-1">

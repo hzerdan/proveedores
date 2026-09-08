@@ -6,6 +6,14 @@
   body {
     @apply bg-slate-950 text-slate-100;
     font-family: 'Inter', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  code, kbd, samp, pre, .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    font-feature-settings: "zero" 1, "tnum" 1; /* Cero con punto interior y números tabulares proporcionales */
+    letter-spacing: 0.02em;
   }
 }
 

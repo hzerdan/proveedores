@@ -185,42 +185,27 @@ export const MobileCapturePage: React.FC<MobileCapturePageProps> = ({ captureTok
 
     try {
       const sanitizedName = (fileName || 'comprobante.jpg').replace(/[^a-zA-Z0-9._-]/g, '_');
-      const storagePath = `temp-uploads/${sessionInfo.session_id}/${Date.now()}_${sanitizedName}`;
-
-      // Convert Blob to File
       const fileToUpload = new File([selectedBlob], sanitizedName, { type: 'image/jpeg' });
 
-      // Upload to Storage
-      const { error: uploadErr } = await supabase.storage
-        .from('supplier-documents')
-        .upload(storagePath, fileToUpload, {
-          contentType: 'image/jpeg',
-          upsert: true,
-        });
+      const formData = new FormData();
+      formData.append('file', fileToUpload);
+      formData.append('session_token', captureToken);
+      formData.append('file_name', sanitizedName);
 
-      if (uploadErr) {
-        console.error('Storage upload error:', uploadErr);
-        throw new Error(`Error de almacenamiento: ${uploadErr.message}`);
-      }
-
-      // Submit via RPC
-      const { data: submitRes, error: submitErr } = await supabase.rpc('rpc_submit_mobile_upload', {
-        p_session_token: captureToken,
-        p_storage_path: storagePath,
-        p_file_name: sanitizedName,
-        p_mime_type: 'image/jpeg',
-        p_file_size: selectedBlob.size,
+      // Delegar la subida y contrastación a la Edge Function segura mobile-upload
+      const { data: uploadRes, error: uploadErr } = await supabase.functions.invoke('mobile-upload', {
+        body: formData,
       });
 
-      if (submitErr) {
-        console.error('RPC submit error:', submitErr);
-        throw new Error(`Error al registrar subida: ${submitErr.message}`);
+      if (uploadErr) {
+        console.error('Mobile upload error:', uploadErr);
+        throw new Error(`Error al enviar la imagen: ${uploadErr.message}`);
       }
 
-      if (submitRes && submitRes.success) {
+      if (uploadRes && uploadRes.success) {
         setUploadSuccess(true);
       } else {
-        throw new Error('No se pudo confirmar la recepción del comprobante');
+        throw new Error(uploadRes?.error || 'No se pudo confirmar la recepción del comprobante');
       }
     } catch (err: any) {
       console.error('Error uploading mobile document:', err);

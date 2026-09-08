@@ -5,8 +5,6 @@ import {
   Menu,
   ChevronDown,
   ShieldCheck,
-  KeyRound,
-  UserCheck,
   LogOut,
   ChevronRight,
 } from 'lucide-react';
@@ -22,7 +20,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenMobileMenu,
   className = '',
 }) => {
-  const { profile, roles, availableProfiles, switchProfile, signOut } = useAuth();
+  const { profile, roles, signOut } = useAuth();
   const [showRoleMenu, setShowRoleMenu] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
@@ -117,7 +115,7 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => setShowRoleMenu((prev) => !prev)}
             aria-haspopup="true"
             aria-expanded={showRoleMenu}
-            aria-label="Menú de usuario y cambio de perfil"
+            aria-label="Menú de usuario y sesión"
             className="flex items-center gap-2.5 sm:gap-3 bg-slate-800/60 hover:bg-slate-800 border border-slate-700/50 px-2.5 sm:px-3 py-1.5 rounded-xl transition-all text-left outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           >
             <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-slate-700 to-slate-600 flex items-center justify-center text-xs font-semibold text-white shadow-inner flex-shrink-0">
@@ -140,66 +138,33 @@ export const Header: React.FC<HeaderProps> = ({
             <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
           </button>
 
-          {/* Dynamic Profiles Dropdown Menu */}
+          {/* User Session Dropdown Menu */}
           {showRoleMenu && (
             <div
               ref={dropdownRef}
-              className="absolute right-0 mt-2 w-72 rounded-2xl bg-slate-900 border border-slate-700/90 shadow-2xl shadow-black/80 p-2 z-50 animate-in fade-in zoom-in-95 duration-150 backdrop-blur-md space-y-1"
+              className="absolute right-0 mt-2 w-72 rounded-2xl bg-slate-900 border border-slate-700/90 shadow-2xl shadow-black/80 p-3 z-50 animate-in fade-in zoom-in-95 duration-150 backdrop-blur-md space-y-3"
             >
-              <div className="px-3 py-1.5 text-[11px] font-semibold text-slate-400 border-b border-slate-800">
-                Cambiar Perfil Activo
+              <div className="space-y-1">
+                <div className="text-xs font-bold text-white flex items-center gap-2">
+                  <ShieldCheck className="w-4 h-4 text-sky-400" />
+                  <span>Sesión Autenticada</span>
+                </div>
+                <p className="text-[11px] text-slate-300 font-semibold truncate">
+                  {profile?.full_name || `${profile?.first_name || ''} ${profile?.last_name || ''}`.trim()}
+                </p>
+                <p className="text-[10px] text-slate-400 font-mono truncate">{profile?.email}</p>
+                <div className="pt-1">
+                  <span className={`inline-block text-[10px] px-2 py-0.5 rounded font-mono font-semibold border ${roleColor}`}>
+                    Rol: {roles[0] || 'OPERADOR'}
+                  </span>
+                </div>
               </div>
 
-              <div className="max-h-60 overflow-y-auto space-y-1 py-1">
-                {availableProfiles.map((p) => {
-                  const isSelected = profile?.id === p.id;
-                  const rCode = p.role_code;
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => {
-                        switchProfile(p.id);
-                        setShowRoleMenu(false);
-                      }}
-                      className={`w-full text-left px-3 py-2 text-xs rounded-xl flex items-center justify-between transition-colors outline-none focus-visible:ring-2 focus-visible:ring-sky-500 ${
-                        isSelected
-                          ? 'bg-sky-500/20 text-white font-bold border border-sky-500/30'
-                          : 'hover:bg-slate-800 text-slate-200'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2.5 truncate">
-                        {rCode === 'ADMIN' ? (
-                          <ShieldCheck className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                        ) : rCode === 'ENCARGADO' ? (
-                          <KeyRound className="w-4 h-4 text-emerald-400 flex-shrink-0" />
-                        ) : (
-                          <UserCheck className="w-4 h-4 text-sky-400 flex-shrink-0" />
-                        )}
-                        <div className="truncate">
-                          <div className="truncate">
-                            {p.first_name} {p.last_name}
-                          </div>
-                          <div className="text-[10px] text-slate-400 truncate">{p.email}</div>
-                        </div>
-                      </div>
-                      <span
-                        className={`text-[10px] px-1.5 py-0.5 rounded font-mono ml-2 flex-shrink-0 ${
-                          rCode === 'ADMIN'
-                            ? 'bg-amber-500/20 text-amber-300'
-                            : rCode === 'ENCARGADO'
-                            ? 'bg-emerald-500/20 text-emerald-300'
-                            : 'bg-sky-500/20 text-sky-300'
-                        }`}
-                      >
-                        {rCode}
-                      </span>
-                    </button>
-                  );
-                })}
+              <div className="text-[10px] text-slate-400 bg-slate-800/60 p-2.5 rounded-xl border border-slate-700/50">
+                Identidad validada criptográficamente con Supabase Auth JWT. Para cambiar de usuario, cierre sesión.
               </div>
 
-              <div className="pt-1 border-t border-slate-800 mt-1">
+              <div className="pt-1 border-t border-slate-800">
                 <button
                   type="button"
                   onClick={() => {

@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 
 export const UsersSecurityMaster: React.FC = () => {
-  const { hasPermission, switchProfile, profile: currentProfile } = useAuth();
+  const { hasPermission, profile: currentProfile } = useAuth();
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [userRolesMap, setUserRolesMap] = useState<Record<number, string[]>>({});
@@ -221,12 +221,13 @@ export const UsersSecurityMaster: React.FC = () => {
                       </td>
 
                       <td className="px-6 py-3.5 text-center">
-                        <button
-                          onClick={() => switchProfile(p.id)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-[11px] font-semibold border border-slate-700 transition-colors"
-                        >
-                          Usar este perfil
-                        </button>
+                        {p.id === currentProfile?.id ? (
+                          <span className="px-2.5 py-1 rounded-lg bg-sky-500/20 text-sky-300 text-[11px] font-semibold border border-sky-500/30">
+                            Sesión Activa
+                          </span>
+                        ) : (
+                          <span className="text-slate-500 text-xs">-</span>
+                        )}
                       </td>
                     </tr>
                   );

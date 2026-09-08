@@ -1,8 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { supabase } from '../../lib/supabase';
-import { PaymentProjectionRecord } from '../../types/database';
+import { PaymentProjectionRecord, PunctualPaymentStatus } from '../../types/database';
 import { formatDate, formatMoney } from '../../lib/formatters';
 import { BucketDetailModal } from '../aging/BucketDetailModal';
+import { PunctualPaymentBadge } from '../common/PunctualPaymentBadge';
+import { PunctualPaymentFilter } from '../common/PunctualPaymentFilter';
+import { calculatePunctualStatusFromSummary } from '../../lib/punctualPayment';
 import {
   Calendar,
   Search,
@@ -33,6 +36,10 @@ interface PivotRow {
   weeks: Record<string, number>;
   noDueDate: number;
   total: number;
+  strict_due_date_discount?: boolean;
+  discount_payment_note?: string | null;
+  min_due_date?: string | null;
+  has_no_due_date_docs?: boolean;
 }
 
 export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
@@ -47,6 +54,7 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [currencyFilter, setCurrencyFilter] = useState('ALL');
+  const [punctualFilters, setPunctualFilters] = useState<PunctualPaymentStatus[]>([]);
 
   // Drilldown Modal state
   const [drilldownModalOpen, setDrilldownModalOpen] = useState(false);
@@ -140,6 +148,10 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
         weeks: {},
         noDueDate: 0,
         total: 0,
+        strict_due_date_discount: r.strict_due_date_discount,
+        discount_payment_note: r.discount_payment_note,
+        min_due_date: r.min_due_date,
+        has_no_due_date_docs: r.has_no_due_date_docs,
       });
     }
 
@@ -165,9 +177,26 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
         row.entity_name.toLowerCase().includes(q) ||
         row.entity_code.toLowerCase().includes(q);
       const matchCurrency = currencyFilter === 'ALL' || row.currency === currencyFilter;
-      return matchSearch && matchCurrency;
+
+      let matchPunctual = true;
+      if (dimension === 'SUPPLIERS' && punctualFilters.length > 0) {
+        if (!row.strict_due_date_discount) {
+          matchPunctual = false;
+        } else {
+          const punctualStatus = calculatePunctualStatusFromSummary(
+            row.min_due_date || null,
+            Boolean(row.has_no_due_date_docs),
+            cutoffDate
+          );
+          matchPunctual = punctualFilters.includes(punctualStatus.status);
+        }
+      }
+
+      return matchSearch && matchCurrency && matchPunctual;
+
     })
     .sort((a, b) => a.entity_name.localeCompare(b.entity_name));
+
 
   // Weekly & Overall Totals strictly by currency
   const currencyTotals: Record<
@@ -354,6 +383,16 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
             </select>
           </div>
         </div>
+
+        {/* Punctual Payment Multi-select Filter (Only for Suppliers) */}
+        {dimension === 'SUPPLIERS' && (
+          <div className="pt-2 border-t border-slate-800/60">
+            <PunctualPaymentFilter
+              selectedStatuses={punctualFilters}
+              onChangeStatuses={setPunctualFilters}
+            />
+          </div>
+        )}
       </div>
 
       {/* Main Projection Matrix Grid */}
@@ -402,21 +441,41 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
                   </td>
                 </tr>
               ) : (
-                filteredRows.map((row) => (
-                  <tr
-                    key={`${row.entity_id}-${row.currency}`}
-                    className="hover:bg-slate-800/40 transition-colors"
-                  >
-                    {/* Entity (Sticky) */}
-                    <td className="px-4 py-3 font-sans sticky left-0 bg-slate-900 z-10">
-                      <div className="font-bold text-white whitespace-nowrap flex items-center space-x-1.5">
-                        {dimension === 'SELLERS' && <UserCheck className="w-3.5 h-3.5 text-emerald-400" />}
-                        <span>{row.entity_name}</span>
-                      </div>
-                      <div className="text-[10px] text-slate-500 whitespace-nowrap">
-                        {dimension === 'SUPPLIERS' ? `CUIT: ${row.entity_code}` : `${row.entity_code ? row.entity_code + ' • ' : ''}${row.active_suppliers_count || 0} proveedores`}
-                      </div>
-                    </td>
+                filteredRows.map((row) => {
+                  const punctualAgg =
+                    dimension === 'SUPPLIERS' && row.strict_due_date_discount
+                      ? calculatePunctualStatusFromSummary(
+                          row.min_due_date || null,
+                          Boolean(row.has_no_due_date_docs),
+                          cutoffDate
+                        )
+                      : null;
+
+                  return (
+                    <tr
+                      key={`${row.entity_id}-${row.currency}`}
+                      className="hover:bg-slate-800/40 transition-colors"
+                    >
+                      {/* Entity (Sticky) */}
+                      <td className="px-4 py-3 font-sans sticky left-0 bg-slate-900 z-10">
+                        <div className="font-bold text-white whitespace-nowrap flex items-center space-x-2">
+                          {dimension === 'SELLERS' && <UserCheck className="w-3.5 h-3.5 text-emerald-400" />}
+                          <span>{row.entity_name}</span>
+                          {punctualAgg && (
+                            <PunctualPaymentBadge
+                              status={punctualAgg.status}
+                              note={row.discount_payment_note || undefined}
+                              hasNoDueDateDocs={punctualAgg.hasNoDueDateDocs}
+                              size="sm"
+                            />
+                          )}
+                        </div>
+
+                        <div className="text-[10px] text-slate-500 whitespace-nowrap">
+                          {dimension === 'SUPPLIERS' ? `CUIT: ${row.entity_code}` : `${row.entity_code ? row.entity_code + ' • ' : ''}${row.active_suppliers_count || 0} proveedores`}
+                        </div>
+                      </td>
+
 
                     {/* Currency */}
                     <td className="px-3 py-3 text-center whitespace-nowrap">
@@ -508,8 +567,10 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
                       )}
                     </td>
                   </tr>
-                ))
-              )}
+                );
+              })
+            )}
+
             </tbody>
 
             {/* Totals Footer Rows per Currency (Never Mixed) */}

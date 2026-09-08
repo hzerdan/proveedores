@@ -9,6 +9,10 @@ import {
 } from '../../types/database';
 import { useAuth } from '../../context/AuthContext';
 import { formatDate, formatMoney } from '../../lib/formatters';
+import { DocumentFileAttachmentIndicator } from '../documents/DocumentFileAttachmentIndicator';
+import { DocumentViewerModal } from '../documents/DocumentViewerModal';
+import { PunctualPaymentBadge } from '../common/PunctualPaymentBadge';
+import { calculatePunctualPaymentStatus } from '../../lib/punctualPayment';
 import {
   Building2,
   Plus,
@@ -67,6 +71,9 @@ export const AccountStatement: React.FC<AccountStatementProps> = ({
   const [onlyWithBalance, setOnlyWithBalance] = useState(false);
   const [expandedDocIds, setExpandedDocIds] = useState<Set<number>>(new Set());
   const [isLoading, setIsLoading] = useState(false);
+  const [viewerDoc, setViewerDoc] = useState<{ id: number; ref: string } | null>(null);
+
+  const currentSupplier = suppliers.find((s) => s.id === selectedSupplierId);
 
   const toggleDocExpand = (docId: number) => {
     setExpandedDocIds((prev) => {
@@ -861,7 +868,24 @@ export const AccountStatement: React.FC<AccountStatementProps> = ({
                                     <span className="font-bold text-white whitespace-nowrap">
                                       {doc.human_reference}
                                     </span>
+                                    {doc.files_count !== undefined && doc.files_count > 0 && (
+                                      <DocumentFileAttachmentIndicator
+                                        filesCount={doc.files_count}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setViewerDoc({ id: doc.document_id, ref: doc.human_reference });
+                                        }}
+                                      />
+                                    )}
+                                    {currentSupplier?.strict_due_date_discount && doc.reference_balance > 0 && (
+                                      <PunctualPaymentBadge
+                                        status={calculatePunctualPaymentStatus(doc.due_date)}
+                                        size="sm"
+                                        note={currentSupplier.discount_payment_note || undefined}
+                                      />
+                                    )}
                                     {hasChildren && (
+
                                       <span className="text-[9px] font-sans px-1.5 py-0.2 rounded bg-slate-800 border border-slate-700 text-slate-400 font-medium">
                                         {childSummaryLabel}
                                       </span>
@@ -873,6 +897,7 @@ export const AccountStatement: React.FC<AccountStatementProps> = ({
                                     </div>
                                   )}
                                 </td>
+
                                 <td className="px-3 py-3.5 font-sans whitespace-nowrap">
                                   <span
                                     className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${
@@ -1147,6 +1172,17 @@ export const AccountStatement: React.FC<AccountStatementProps> = ({
           </div>
         </>
       )}
+
+
+      {viewerDoc && (
+        <DocumentViewerModal
+          isOpen={true}
+          onClose={() => setViewerDoc(null)}
+          documentId={viewerDoc.id}
+          humanReference={viewerDoc.ref}
+        />
+      )}
     </div>
   );
 };
+
