@@ -1778,88 +1778,29 @@ export type Database = {
         Args: { p_document_id: number; p_override_reason?: string }
         Returns: Json
       }
-      rpc_create_and_confirm_document:
-        | {
-            Args: {
-              p_concept?: string
-              p_document_number: number
-              p_document_type_id: number
-              p_due_date: string
-              p_human_reference: string
-              p_issue_date: string
-              p_letter: string
-              p_notes?: string
-              p_override_reason?: string
-              p_point_of_sale: number
-              p_supplier_id: number
-              p_total_amount: number
-            }
-            Returns: Json
-          }
-        | {
-            Args: {
-              p_concept?: string
-              p_currency?: string
-              p_document_number?: number
-              p_document_type_id: number
-              p_due_date?: string
-              p_human_reference?: string
-              p_issue_date?: string
-              p_letter?: string
-              p_notes?: string
-              p_override_reason?: string
-              p_point_of_sale?: number
-              p_seller_id?: number
-              p_supplier_id: number
-              p_total_amount?: number
-            }
-            Returns: Json
-          }
-        | {
-            Args: {
-              p_ai_extraction_id?: number
-              p_concept?: string
-              p_confirmed_payload_diff?: Json
-              p_currency?: string
-              p_document_number?: number
-              p_document_type_id: number
-              p_due_date?: string
-              p_file_id?: number
-              p_human_reference?: string
-              p_issue_date?: string
-              p_letter?: string
-              p_notes?: string
-              p_override_reason?: string
-              p_point_of_sale?: number
-              p_seller_id?: number
-              p_supplier_id: number
-              p_total_amount?: number
-            }
-            Returns: Json
-          }
-        | {
-            Args: {
-              p_ai_extraction_id?: number
-              p_concept?: string
-              p_confirmed_payload_diff?: Json
-              p_currency?: string
-              p_document_number?: number
-              p_document_type_id: number
-              p_due_date?: string
-              p_file_id?: number
-              p_human_reference?: string
-              p_issue_date?: string
-              p_letter?: string
-              p_notes?: string
-              p_numbering_series_id?: number
-              p_override_reason?: string
-              p_point_of_sale?: number
-              p_seller_id?: number
-              p_supplier_id: number
-              p_total_amount?: number
-            }
-            Returns: Json
-          }
+      rpc_create_and_confirm_document: {
+        Args: {
+          p_ai_extraction_id?: number
+          p_concept?: string
+          p_confirmed_payload_diff?: Json
+          p_currency?: string
+          p_document_number?: number
+          p_document_type_id: number
+          p_due_date?: string
+          p_file_id?: number
+          p_human_reference?: string
+          p_issue_date?: string
+          p_letter?: string
+          p_notes?: string
+          p_numbering_series_id?: number
+          p_override_reason?: string
+          p_point_of_sale?: number
+          p_seller_id?: number
+          p_supplier_id: number
+          p_total_amount?: number
+        }
+        Returns: Json
+      }
       rpc_create_and_confirm_op: {
         Args: {
           p_concept?: string
