@@ -114,6 +114,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
       .eq('is_active', true)
       .neq('code', 'ORDEN_PAGO')
       .neq('code', 'APL')
+      .neq('code', 'NND')
       .order('id');
 
     if (types) {

@@ -15,6 +15,8 @@ interface PaymentOrderModalProps {
 interface TargetItem {
   doc: DocumentSummaryView;
   appliedAmount: string;
+  discountType: 'PERCENT' | 'FIXED';
+  discountValue: string;
 }
 
 export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
@@ -89,6 +91,8 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
           (data || []).map((d: DocumentSummaryView) => ({
             doc: d,
             appliedAmount: '',
+            discountType: 'PERCENT',
+            discountValue: '',
           }))
         );
       } catch (err) {
@@ -103,24 +107,82 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
 
   const numTotalAmount = parseFloat(totalAmount) || 0;
 
+  const getItemDiscountAmount = (item: TargetItem): number => {
+    const val = parseFloat(item.discountValue);
+    if (isNaN(val) || val <= 0) return 0;
+    if (item.discountType === 'PERCENT') {
+      const pct = Math.min(100, Math.max(0, val));
+      return Math.round(item.doc.reference_balance * (pct / 100) * 100) / 100;
+    }
+    return Math.min(item.doc.reference_balance, Math.max(0, Math.round(val * 100) / 100));
+  };
+
+  const totalDiscount = targetItems.reduce((acc, curr) => acc + getItemDiscountAmount(curr), 0);
+
   const totalImputed = targetItems.reduce((acc, curr) => {
     const num = parseFloat(curr.appliedAmount);
     return acc + (isNaN(num) ? 0 : num);
   }, 0);
 
+  const totalDebtCancelled = totalImputed + totalDiscount;
   const remainder = Math.max(0, numTotalAmount - totalImputed);
 
   const handleAmountChange = (index: number, val: string) => {
     const updated = [...targetItems];
-    updated[index].appliedAmount = val;
+    const item = updated[index];
+    const discAmt = getItemDiscountAmount(item);
+    const maxAllowed = Math.round((item.doc.reference_balance - discAmt) * 100) / 100;
+    const numVal = parseFloat(val);
+
+    if (!isNaN(numVal) && numVal > maxAllowed + 0.001) {
+      updated[index] = { ...item, appliedAmount: maxAllowed > 0 ? maxAllowed.toFixed(2) : '' };
+    } else {
+      updated[index] = { ...item, appliedAmount: val };
+    }
+    setTargetItems(updated);
+  };
+
+  const handleDiscountTypeChange = (index: number, type: 'PERCENT' | 'FIXED') => {
+    const updated = [...targetItems];
+    const item = { ...updated[index], discountType: type };
+    const discAmt = getItemDiscountAmount(item);
+    const currentApplied = parseFloat(item.appliedAmount) || 0;
+    const maxAllowedApplied = Math.round((item.doc.reference_balance - discAmt) * 100) / 100;
+
+    if (currentApplied > 0 && currentApplied > maxAllowedApplied) {
+      item.appliedAmount = maxAllowedApplied > 0 ? maxAllowedApplied.toFixed(2) : '';
+    }
+
+    updated[index] = item;
+    setTargetItems(updated);
+  };
+
+  const handleDiscountValueChange = (index: number, val: string) => {
+    const updated = [...targetItems];
+    const item = { ...updated[index], discountValue: val };
+    const discAmt = getItemDiscountAmount(item);
+    const currentApplied = parseFloat(item.appliedAmount) || 0;
+    const maxAllowedApplied = Math.round((item.doc.reference_balance - discAmt) * 100) / 100;
+
+    if (currentApplied > 0 && currentApplied > maxAllowedApplied) {
+      item.appliedAmount = maxAllowedApplied > 0 ? maxAllowedApplied.toFixed(2) : '';
+    }
+
+    updated[index] = item;
     setTargetItems(updated);
   };
 
   const handleApplyFullDebt = (index: number) => {
     const item = targetItems[index];
+    const discAmt = getItemDiscountAmount(item);
+    const netDebt = Math.max(0, Math.round((item.doc.reference_balance - discAmt) * 100) / 100);
     const availableToImpute = Math.max(0, numTotalAmount - totalImputed + (parseFloat(item.appliedAmount) || 0));
-    const maxApplicable = Math.min(item.doc.reference_balance, availableToImpute > 0 ? availableToImpute : item.doc.reference_balance);
-    handleAmountChange(index, maxApplicable.toString());
+    const maxApplicable = Math.min(netDebt, availableToImpute > 0 ? availableToImpute : netDebt);
+    handleAmountChange(index, maxApplicable > 0 ? maxApplicable.toFixed(2) : '');
+  };
+
+  const handleSyncTotalAmount = () => {
+    setTotalAmount(totalImputed > 0 ? totalImputed.toFixed(2) : '');
   };
 
   const padPos = (pointOfSale || '1').padStart(4, '0');
@@ -139,6 +201,15 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
     if (totalImputed > numTotalAmount) {
       setError(`El total a imputar (${formatMoney(totalImputed)}) supera el total de la Orden de Pago (${formatMoney(numTotalAmount)}).`);
       return;
+    }
+
+    for (const t of targetItems) {
+      const app = parseFloat(t.appliedAmount) || 0;
+      const disc = getItemDiscountAmount(t);
+      if (app + disc > t.doc.reference_balance + 0.01) {
+        setError(`En la factura ${t.doc.human_reference}, la suma de pago (${formatMoney(app)}) y descuento (${formatMoney(disc)}) excede la deuda actual (${formatMoney(t.doc.reference_balance)}).`);
+        return;
+      }
     }
 
     // Numbering series validation
@@ -165,19 +236,22 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
 
       if (!dtData) throw new Error('Tipo de documento ORDEN_PAGO no encontrado.');
 
-      // 2. Prepare Imputations Payload
+      // 2. Prepare Imputations Payload (applied amount and discount amount)
       const validImputations = targetItems
         .filter((t) => {
-          const num = parseFloat(t.appliedAmount);
-          return !isNaN(num) && num > 0;
+          const num = parseFloat(t.appliedAmount) || 0;
+          const disc = getItemDiscountAmount(t);
+          return num > 0 || disc > 0;
         })
         .map((t) => ({
           target_document_id: t.doc.document_id,
-          applied_amount: parseFloat(t.appliedAmount),
+          applied_amount: parseFloat(t.appliedAmount) || 0,
+          discount_amount: getItemDiscountAmount(t),
+          discount_percentage: t.discountType === 'PERCENT' ? (parseFloat(t.discountValue) || null) : null,
         }));
 
       // 3. Call RPC rpc_create_and_confirm_op
-      const { error: rpcErr } = await supabase.rpc('rpc_create_and_confirm_op', {
+      const { data: rpcRes, error: rpcErr } = await supabase.rpc('rpc_create_and_confirm_op', {
         p_supplier_id: Number(supplierId),
         p_document_type_id: dtData.id,
         p_point_of_sale: numberingMode === 'INTERNAL_SEQUENCE' ? null : (parseInt(pointOfSale, 10) || 1),
@@ -205,9 +279,9 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-slate-900 border border-slate-800 w-full max-w-3xl rounded-2xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">
+      <div className="bg-slate-900 border border-slate-800 w-full max-w-4xl rounded-2xl shadow-2xl overflow-hidden max-h-[92vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-slate-800 bg-slate-800/40">
+        <div className="flex items-center justify-between px-6 py-3.5 border-b border-slate-800 bg-slate-800/40">
           <div className="flex items-center space-x-3">
             <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
               <Receipt className="w-5 h-5" />
@@ -215,7 +289,7 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
             <div>
               <h2 className="text-base font-bold text-white">Nueva Orden de Pago (OP)</h2>
               <p className="text-xs text-slate-400">
-                Imputación nativa directa a facturas o generación de remanente propio
+                Imputación directa a facturas, cálculo de descuentos y emisión de NND
               </p>
             </div>
           </div>
@@ -228,7 +302,7 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
         </div>
 
         {/* Content Form */}
-        <form onSubmit={handleSubmit} className="p-6 overflow-y-auto space-y-4 flex-1 text-xs">
+        <form onSubmit={handleSubmit} className="p-5 overflow-y-auto space-y-3.5 flex-1 text-xs">
           {error && (
             <div className="p-3.5 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 flex items-center space-x-2">
               <AlertCircle className="w-4 h-4 shrink-0" />
@@ -236,9 +310,9 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
             </div>
           )}
 
-          {/* Supplier & Header Info */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
+          {/* Fila 1: Proveedor & Fecha de Emisión (con tipografía Sans de alta legibilidad para 0 vs 8) */}
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
+            <div className="sm:col-span-8">
               <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
                 Proveedor *
               </label>
@@ -246,7 +320,7 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
                 required
                 value={supplierId}
                 onChange={(e) => setSupplierId(Number(e.target.value))}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white focus:ring-2 focus:ring-emerald-500/50"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-sans text-xs focus:ring-2 focus:ring-emerald-500/50"
               >
                 <option value="" disabled>-- Seleccione proveedor --</option>
                 {suppliers.map((s) => (
@@ -257,7 +331,7 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
               </select>
             </div>
 
-            <div>
+            <div className="sm:col-span-4">
               <label className="block text-[11px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
                 Fecha de Emisión *
               </label>
@@ -266,102 +340,121 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
                 required
                 value={issueDate}
                 onChange={(e) => setIssueDate(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-mono focus:ring-2 focus:ring-emerald-500/50"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-sans font-medium text-xs tracking-wider focus:ring-2 focus:ring-emerald-500/50"
               />
             </div>
           </div>
 
-          {/* Series Selection when INTERNAL_SEQUENCE */}
-          <div className="space-y-3">
-            <SeriesSelector
-              documentTypeId={opDocType?.id || null}
-              selectedSeriesId={selectedSeries?.id || null}
-              onSelectSeries={setSelectedSeries}
-              onModeLoaded={(mode, sList) => {
-                setNumberingMode(mode);
-                setSeriesList(sList);
-              }}
-            />
-          </div>
+          {/* Fila 2: Punto de Venta / Serie & Importe Total OP integrados en una sola fila compacta */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 items-stretch">
+            <div className={numberingMode === 'EXTERNAL' ? 'lg:col-span-7' : 'lg:col-span-7'}>
+              {numberingMode === 'INTERNAL_SEQUENCE' ? (
+                <SeriesSelector
+                  documentTypeId={opDocType?.id || null}
+                  selectedSeriesId={selectedSeries?.id || null}
+                  onSelectSeries={setSelectedSeries}
+                  onModeLoaded={(mode, sList) => {
+                    setNumberingMode(mode);
+                    setSeriesList(sList);
+                  }}
+                />
+              ) : (
+                <div className="grid grid-cols-2 gap-3 h-full">
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                      Pto. Venta / POS
+                    </label>
+                    <input
+                      type="number"
+                      value={pointOfSale}
+                      onChange={(e) => setPointOfSale(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-sans font-medium [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
+                      Número de OP
+                    </label>
+                    <input
+                      type="number"
+                      placeholder="ej: 20001"
+                      value={documentNumber}
+                      onChange={(e) => setDocumentNumber(e.target.value)}
+                      className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-white font-sans font-medium [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
 
-          {/* Numbering & Total Amount */}
-          <div className={`grid gap-4 bg-slate-800/30 p-3.5 rounded-xl border border-slate-700/40 ${numberingMode === 'EXTERNAL' ? 'grid-cols-1 sm:grid-cols-3' : 'grid-cols-1'}`}>
-            {numberingMode === 'EXTERNAL' && (
-              <>
-                <div>
-                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                    Pto. Venta / POS
+            <div className="lg:col-span-5">
+              <div className="bg-slate-800/40 p-2.5 rounded-xl border border-slate-700/60 flex flex-col justify-between h-full">
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[10px] font-bold text-emerald-400 uppercase tracking-wider">
+                    Importe Total OP * ($)
                   </label>
+                  {totalImputed > 0 && Math.abs(numTotalAmount - totalImputed) > 0.009 && (
+                    <span className="text-[10px] text-amber-400 font-sans font-medium">
+                      ≠ Imputado ({formatMoney(totalImputed)})
+                    </span>
+                  )}
+                </div>
+                <div className="relative">
+                  <span className="absolute left-3 top-1.5 text-emerald-400 font-sans font-bold text-sm">$</span>
                   <input
                     type="number"
-                    value={pointOfSale}
-                    onChange={(e) => setPointOfSale(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono"
+                    step="0.01"
+                    required
+                    placeholder="0.00"
+                    value={totalAmount}
+                    onChange={(e) => setTotalAmount(e.target.value)}
+                    className="w-full bg-slate-900 border border-emerald-500/50 rounded-lg pl-7 pr-3 py-1.5 text-white font-sans font-bold text-sm tabular-nums focus:ring-2 focus:ring-emerald-500 shadow-inner [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                   />
                 </div>
-
-                <div>
-                  <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
-                    Número de OP
-                  </label>
-                  <input
-                    type="number"
-                    placeholder="ej: 20001"
-                    value={documentNumber}
-                    onChange={(e) => setDocumentNumber(e.target.value)}
-                    className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-white font-mono"
-                  />
-                </div>
-              </>
-            )}
-
-            <div>
-              <label className="block text-[10px] font-semibold text-emerald-400 uppercase tracking-wider mb-1">
-                Importe Total OP * ($)
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                required
-                placeholder="0.00"
-                value={totalAmount}
-                onChange={(e) => setTotalAmount(e.target.value)}
-                className="w-full bg-slate-800 border border-emerald-500/40 rounded-xl px-3 py-1.5 text-white font-mono font-bold text-sm focus:ring-2 focus:ring-emerald-500"
-              />
+              </div>
             </div>
           </div>
 
-          {/* Live Balance Distribution Tracker */}
-          <div className="grid grid-cols-3 gap-3 bg-slate-800/50 p-3.5 rounded-xl border border-slate-700/60 font-mono">
+          {/* Monitor Compacto de Distribución de Fondos */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 bg-slate-800/30 p-2.5 rounded-xl border border-slate-700/50 font-sans">
             <div>
-              <span className="text-[10px] text-slate-400 block font-sans">Total de la Orden de Pago</span>
-              <span className="font-bold text-white text-sm">
+              <span className="text-[10px] text-slate-400 block">Total OP (Erogación)</span>
+              <span className="font-bold text-white text-xs tabular-nums">
                 {formatMoney(numTotalAmount)}
               </span>
             </div>
 
             <div>
-              <span className="text-[10px] text-slate-400 block font-sans">Imputado a Facturas</span>
-              <span className="font-bold text-emerald-400 text-sm">
+              <span className="text-[10px] text-slate-400 block">Imputado con OP</span>
+              <span className="font-bold text-emerald-400 text-xs tabular-nums">
                 {formatMoney(totalImputed)}
               </span>
             </div>
 
             <div>
-              <span className="text-[10px] text-slate-400 block font-sans">Remanente Propio Libre</span>
-              <span className={`font-bold text-sm ${totalImputed > numTotalAmount ? 'text-rose-400' : 'text-slate-300'}`}>
+              <span className="text-[10px] text-slate-400 block">Descuentos (NND)</span>
+              <span className={`font-bold text-xs tabular-nums ${totalDiscount > 0 ? 'text-amber-400' : 'text-slate-400'}`}>
+                {formatMoney(totalDiscount)}
+              </span>
+            </div>
+
+            <div>
+              <span className="text-[10px] text-slate-400 block">Remanente Libre OP</span>
+              <span className={`font-bold text-xs tabular-nums ${totalImputed > numTotalAmount ? 'text-rose-400' : 'text-slate-300'}`}>
                 {formatMoney(remainder)}
               </span>
             </div>
           </div>
 
-          {/* Pending Invoices Selection */}
-          <div className="space-y-2 pt-2">
+          {/* Sección de Facturas con Scroll Dedicado */}
+          <div className="space-y-2 pt-1">
             <div className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider flex items-center justify-between">
-              <span>Seleccionar Facturas a Cancelar al Nacer</span>
-              <span className="text-[10px] text-slate-500 font-normal">
-                {targetItems.length} facturas pendientes con saldo
-              </span>
+              <div className="flex items-center gap-2">
+                <span>Seleccionar Facturas a Cancelar al Nacer</span>
+                <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full border border-slate-700 font-normal">
+                  {targetItems.length} pendientes
+                </span>
+              </div>
             </div>
 
             {targetItems.length === 0 ? (
@@ -371,59 +464,191 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
                   : 'Seleccione un proveedor para cargar facturas pendientes.'}
               </div>
             ) : (
-              <div className="space-y-2 max-h-56 overflow-y-auto pr-1">
-                {targetItems.map((item, idx) => (
-                  <div
-                    key={item.doc.document_id}
-                    className="bg-slate-800/40 p-3 rounded-xl border border-slate-700/50 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 hover:border-slate-600 transition-colors"
-                  >
+              <>
+                {/* Contenedor scrolleable con altura ampliada */}
+                <div className="space-y-2 max-h-72 overflow-y-auto pr-1.5 scrollbar-thin">
+                  {targetItems.map((item, idx) => {
+                    const itemDiscount = getItemDiscountAmount(item);
+                    const itemApplied = parseFloat(item.appliedAmount) || 0;
+                    const itemTotalCancelled = itemApplied + itemDiscount;
+                    const isOverDebt = itemTotalCancelled > item.doc.reference_balance + 0.01;
+                    const isFullySettled = Math.abs(itemTotalCancelled - item.doc.reference_balance) < 0.01;
+
+                    return (
+                      <div
+                        key={item.doc.document_id}
+                        className={`p-3 rounded-xl border transition-colors ${
+                          isOverDebt
+                            ? 'bg-rose-950/20 border-rose-500/40'
+                            : isFullySettled
+                            ? 'bg-emerald-950/20 border-emerald-500/40'
+                            : 'bg-slate-800/40 border-slate-700/50 hover:border-slate-600'
+                        }`}
+                      >
+                        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3">
+                          {/* Document Info */}
+                          <div className="min-w-[210px]">
+                            <div className="flex items-center space-x-2">
+                              <span className="font-sans font-bold text-white text-xs tracking-wide">
+                                {item.doc.human_reference}
+                              </span>
+                              <span className="text-[10px] text-slate-500 font-sans">
+                                #{item.doc.document_id}
+                              </span>
+                              <span className="text-[10px] bg-rose-500/10 text-rose-300 px-1.5 py-0.5 rounded border border-rose-500/20 font-medium">
+                                {item.doc.document_type_name}
+                              </span>
+                            </div>
+                            <div className="text-[11px] text-slate-400 mt-1 flex flex-wrap items-center gap-x-2 font-sans">
+                              <span>Emisión: <span className="font-medium text-slate-300">{formatDate(item.doc.issue_date)}</span></span>
+                              <span>•</span>
+                              <span>Deuda: <span className="font-bold text-rose-400 tabular-nums">{formatMoney(item.doc.reference_balance)}</span></span>
+                            </div>
+                            {itemDiscount > 0 && (
+                              <div className="mt-1 text-[10px] text-amber-300 font-sans flex items-center gap-1.5">
+                                <span>Desc NND: -{formatMoney(itemDiscount)}</span>
+                                <span className="text-slate-500">|</span>
+                                <span className="text-slate-300">Neto a pagar: {formatMoney(Math.max(0, item.doc.reference_balance - itemDiscount))}</span>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Action Controls: Discount & Applied Amount (sin spinners) */}
+                          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full lg:w-auto justify-end">
+                            {/* Discount Input Block */}
+                            <div className="flex items-center bg-slate-900/80 p-1 rounded-lg border border-slate-700/70 gap-1 shadow-inner">
+                              <div className="flex rounded overflow-hidden border border-slate-700 text-[10px]">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDiscountTypeChange(idx, 'PERCENT')}
+                                  className={`px-2 py-0.5 font-bold transition-colors ${
+                                    item.discountType === 'PERCENT'
+                                      ? 'bg-amber-500 text-slate-950 font-black'
+                                      : 'bg-slate-800 text-slate-400 hover:text-white'
+                                  }`}
+                                  title="Descuento porcentual (%)"
+                                >
+                                  %
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDiscountTypeChange(idx, 'FIXED')}
+                                  className={`px-2 py-0.5 font-bold transition-colors ${
+                                    item.discountType === 'FIXED'
+                                      ? 'bg-amber-500 text-slate-950 font-black'
+                                      : 'bg-slate-800 text-slate-400 hover:text-white'
+                                  }`}
+                                  title="Descuento monto fijo ($)"
+                                >
+                                  $
+                                </button>
+                              </div>
+
+                              <div className="relative w-20">
+                                <input
+                                  type="number"
+                                  step={item.discountType === 'PERCENT' ? '0.1' : '0.01'}
+                                  min="0"
+                                  max={item.discountType === 'PERCENT' ? '100' : undefined}
+                                  placeholder={item.discountType === 'PERCENT' ? '0%' : '0.00'}
+                                  value={item.discountValue}
+                                  onChange={(e) => handleDiscountValueChange(idx, e.target.value)}
+                                  className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-0.5 font-sans font-bold text-right text-amber-300 text-xs tabular-nums focus:ring-1 focus:ring-amber-500 focus:border-amber-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                  title={item.discountType === 'PERCENT' ? 'Porcentaje de descuento' : 'Monto de descuento'}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Saldar button */}
+                            <button
+                              type="button"
+                              onClick={() => handleApplyFullDebt(idx)}
+                              className="px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] font-semibold transition-colors shrink-0 shadow-sm"
+                              title="Imputar el saldo neto pendiente con la OP"
+                            >
+                              Saldar
+                            </button>
+
+                            {/* OP Applied Amount Input (sin spinners) */}
+                            <div className="relative w-32 shrink-0">
+                              <span className="absolute left-2.5 top-1 text-slate-400 font-sans text-xs">$</span>
+                              <input
+                                type="number"
+                                step="0.01"
+                                placeholder="0.00"
+                                value={item.appliedAmount}
+                                onChange={(e) => handleAmountChange(idx, e.target.value)}
+                                className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-5 pr-2 py-1 font-sans font-bold text-right text-white text-xs tabular-nums focus:ring-1 focus:ring-emerald-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                title="Importe a cancelar desde la Orden de Pago"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Barra de Subtotal y Botón para Igualar Total OP */}
+                <div className="p-3 bg-slate-800/80 border border-slate-700/80 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-md">
+                  <div className="flex flex-wrap items-center gap-x-5 gap-y-1 text-xs">
                     <div>
-                      <div className="flex items-center space-x-2">
-                        <span className="font-mono font-bold text-white text-xs">
-                          {item.doc.human_reference}
-                        </span>
-                        <span className="text-[10px] text-slate-500 font-mono">
-                          #{item.doc.document_id}
-                        </span>
-                        <span className="text-[10px] bg-rose-500/10 text-rose-300 px-1.5 py-0.2 rounded border border-rose-500/20">
-                          {item.doc.document_type_name}
-                        </span>
-                      </div>
-                      <div className="text-[11px] text-slate-400 mt-0.5">
-                        Emisión: <span className="font-mono text-slate-300">{formatDate(item.doc.issue_date)}</span> •
-                        Deuda: <span className="font-mono font-bold text-rose-400">{formatMoney(item.doc.reference_balance)}</span>
-                      </div>
+                      <span className="text-slate-400 text-[10px] uppercase tracking-wider block">Subtotal Imputado OP</span>
+                      <span className="font-bold text-emerald-400 font-sans tabular-nums text-sm">
+                        {formatMoney(totalImputed)}
+                      </span>
                     </div>
 
-                    <div className="flex items-center space-x-2 w-full sm:w-auto justify-end">
-                      <button
-                        type="button"
-                        onClick={() => handleApplyFullDebt(idx)}
-                        className="px-2 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] font-semibold"
-                      >
-                        Saldar
-                      </button>
-
-                      <div className="relative w-32">
-                        <span className="absolute left-2 top-1.5 text-slate-400 font-mono">$</span>
-                        <input
-                          type="number"
-                          step="0.01"
-                          placeholder="0.00"
-                          value={item.appliedAmount}
-                          onChange={(e) => handleAmountChange(idx, e.target.value)}
-                          className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-5 pr-2 py-1 font-mono text-right text-white text-xs focus:ring-1 focus:ring-emerald-500"
-                        />
+                    {totalDiscount > 0 && (
+                      <div>
+                        <span className="text-slate-400 text-[10px] uppercase tracking-wider block">Descuentos NND</span>
+                        <span className="font-bold text-amber-400 font-sans tabular-nums text-sm">
+                          {formatMoney(totalDiscount)}
+                        </span>
                       </div>
+                    )}
+
+                    <div>
+                      <span className="text-slate-400 text-[10px] uppercase tracking-wider block">Total Cancelado</span>
+                      <span className="font-bold text-white font-sans tabular-nums text-sm">
+                        {formatMoney(totalDebtCancelled)}
+                      </span>
                     </div>
                   </div>
-                ))}
-              </div>
+
+                  {/* Botón para igualar el total de la OP al subtotal imputado */}
+                  {totalImputed > 0 && Math.abs(numTotalAmount - totalImputed) > 0.009 && (
+                    <button
+                      type="button"
+                      onClick={handleSyncTotalAmount}
+                      className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white border border-emerald-400/30 text-xs font-bold transition-all shadow-md shadow-emerald-950/40 hover:scale-[1.02] active:scale-[0.98] shrink-0"
+                      title="Copiar el subtotal imputado al campo Importe Total de la OP"
+                    >
+                      <span>⚡ Igualar Importe OP a {formatMoney(totalImputed)}</span>
+                    </button>
+                  )}
+                </div>
+
+                {/* Banner de NND reubicado debajo del Subtotal */}
+                {totalDiscount > 0 && (
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 px-3.5 py-2.5 bg-amber-500/10 border border-amber-500/25 rounded-xl text-xs text-amber-300 animate-in fade-in">
+                    <div className="flex items-center gap-2.5">
+                      <Receipt className="w-4 h-4 text-amber-400 shrink-0" />
+                      <span>
+                        Se emitirá automáticamente una <strong>Nuestra Nota de Débito (NND)</strong> por <strong>{formatMoney(totalDiscount)}</strong> para documentar el descuento comercial.
+                      </span>
+                    </div>
+                    <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-500/20 px-2 py-0.5 rounded text-amber-200 shrink-0">
+                      NND Automática
+                    </span>
+                  </div>
+                )}
+              </>
             )}
           </div>
 
-          {/* Concept & Notes */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+          {/* Concepto & Observaciones */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
             <div>
               <label className="block text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-1">
                 Concepto / Referencia
@@ -433,7 +658,7 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
                 placeholder="ej: Pago a cuenta de mercaderías"
                 value={concept}
                 onChange={(e) => setConcept(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-white"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-white text-xs"
               />
             </div>
             <div>
@@ -445,13 +670,13 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
                 placeholder="ej: Transferencia Banco Galicia #4829"
                 value={notes}
                 onChange={(e) => setNotes(e.target.value)}
-                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-white"
+                className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-1.5 text-white text-xs"
               />
             </div>
           </div>
 
           {/* Footer Actions */}
-          <div className="flex items-center justify-end space-x-3 pt-4 border-t border-slate-800">
+          <div className="flex items-center justify-end space-x-3 pt-3 border-t border-slate-800">
             <button
               type="button"
               onClick={onClose}
