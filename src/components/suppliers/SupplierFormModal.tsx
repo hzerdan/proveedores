@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabase';
-import { Supplier, SupplierContact } from '../../types/database';
+import { Supplier, SupplierContact, Seller } from '../../types/database';
 import { useAuth } from '../../context/AuthContext';
 import { SellerSuppliersManager } from '../sellers/SellerSuppliersManager';
-import { X, Building2, Plus, Trash2, Check, AlertCircle } from 'lucide-react';
+import { SellerQuickCreateModal } from '../sellers/SellerQuickCreateModal';
+import { X, Building2, Plus, Trash2, Check, AlertCircle, UserCheck } from 'lucide-react';
 
 interface SupplierFormModalProps {
   supplier?: Supplier | null;
@@ -31,6 +32,12 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
   const [strictDueDateDiscount, setStrictDueDateDiscount] = useState(false);
   const [discountPaymentNote, setDiscountPaymentNote] = useState('');
 
+  // Sellers / Viajantes
+  const [sellersList, setSellersList] = useState<Seller[]>([]);
+  const [selectedSellerId, setSelectedSellerId] = useState<number | ''>('');
+  const [initialSellerId, setInitialSellerId] = useState<number | ''>('');
+  const [showQuickSellerModal, setShowQuickSellerModal] = useState(false);
+
   // Contacts
   const [contacts, setContacts] = useState<Partial<SupplierContact>[]>([]);
   const [activeTab, setActiveTab] = useState<'DATA' | 'SELLERS'>('DATA');
@@ -38,6 +45,7 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    fetchSellers();
     if (supplier) {
       setCode(supplier.code);
       setTradeName(supplier.trade_name);
@@ -50,6 +58,7 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
       setStrictDueDateDiscount(Boolean(supplier.strict_due_date_discount));
       setDiscountPaymentNote(supplier.discount_payment_note || '');
       fetchContacts(supplier.id);
+      fetchSupplierActiveSeller(supplier.id);
     } else {
       // Reset form
       setCode('');
@@ -62,11 +71,42 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
       setIsActive(true);
       setStrictDueDateDiscount(false);
       setDiscountPaymentNote('');
+      setSelectedSellerId('');
+      setInitialSellerId('');
       setContacts([]);
     }
     setActiveTab('DATA');
     setError(null);
   }, [supplier, isOpen]);
+
+  const fetchSellers = async () => {
+    const { data } = await supabase
+      .from('sellers')
+      .select('*')
+      .eq('is_active', true)
+      .order('display_name');
+    if (data) setSellersList(data as Seller[]);
+  };
+
+  const fetchSupplierActiveSeller = async (supId: number) => {
+    const today = new Date().toISOString().split('T')[0];
+    const { data } = await supabase
+      .from('supplier_sellers')
+      .select('seller_id')
+      .eq('supplier_id', supId)
+      .eq('is_active', true)
+      .or(`valid_to.is.null,valid_to.gte.${today}`)
+      .order('valid_from', { ascending: false })
+      .limit(1);
+
+    if (data && data.length > 0) {
+      setSelectedSellerId(data[0].seller_id);
+      setInitialSellerId(data[0].seller_id);
+    } else {
+      setSelectedSellerId('');
+      setInitialSellerId('');
+    }
+  };
 
   const fetchContacts = async (supId: number) => {
     const { data } = await supabase
@@ -104,46 +144,69 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
 
       if (supplier) {
         // Update
+        const updatePayload: any = {
+          trade_name: tradeName.trim(),
+          legal_name: legalName.trim(),
+          tax_id: taxId.trim(),
+          email: email.trim() || null,
+          phone: phone.trim() || null,
+          notes: notes.trim() || null,
+          is_active: isActive,
+          strict_due_date_discount: strictDueDateDiscount,
+          discount_payment_note: discountPaymentNote.trim() || null,
+          updated_at: new Date().toISOString(),
+        };
+        if (code.trim()) {
+          updatePayload.code = code.trim();
+        }
+
         const { error: updErr } = await supabase
           .from('suppliers')
-          .update({
-            code: code.trim(),
-            trade_name: tradeName.trim(),
-            legal_name: legalName.trim(),
-            tax_id: taxId.trim(),
-            email: email.trim() || null,
-            phone: phone.trim() || null,
-            notes: notes.trim() || null,
-            is_active: isActive,
-            strict_due_date_discount: strictDueDateDiscount,
-            discount_payment_note: discountPaymentNote.trim() || null,
-            updated_at: new Date().toISOString(),
-          })
+          .update(updatePayload)
           .eq('id', supplier.id);
 
         if (updErr) throw updErr;
       } else {
         // Insert
+        const insertPayload: any = {
+          trade_name: tradeName.trim(),
+          legal_name: legalName.trim(),
+          tax_id: taxId.trim(),
+          email: email.trim() || null,
+          phone: phone.trim() || null,
+          notes: notes.trim() || null,
+          is_active: isActive,
+          strict_due_date_discount: strictDueDateDiscount,
+          discount_payment_note: discountPaymentNote.trim() || null,
+          created_by: profile.id,
+        };
+        if (code.trim()) {
+          insertPayload.code = code.trim();
+        }
+
         const { data: newSup, error: insErr } = await supabase
           .from('suppliers')
-          .insert({
-            code: code.trim(),
-            trade_name: tradeName.trim(),
-            legal_name: legalName.trim(),
-            tax_id: taxId.trim(),
-            email: email.trim() || null,
-            phone: phone.trim() || null,
-            notes: notes.trim() || null,
-            is_active: isActive,
-            strict_due_date_discount: strictDueDateDiscount,
-            discount_payment_note: discountPaymentNote.trim() || null,
-            created_by: profile.id,
-          })
+          .insert(insertPayload)
           .select()
           .single();
 
         if (insErr) throw insErr;
         savedSupplierId = newSup.id;
+      }
+
+      // Link seller / viajante if specified
+      if (savedSupplierId && selectedSellerId) {
+        if (!supplier || Number(selectedSellerId) !== Number(initialSellerId)) {
+          const { error: linkErr } = await supabase.rpc('rpc_link_supplier_seller', {
+            p_supplier_id: savedSupplierId,
+            p_seller_id: Number(selectedSellerId),
+            p_valid_from: new Date().toISOString().split('T')[0],
+            p_notes: 'Asignado desde ficha del proveedor',
+          });
+          if (linkErr) {
+            console.warn('Advertencia al vincular viajante:', linkErr);
+          }
+        }
       }
 
       // Save contacts
@@ -258,19 +321,29 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
             )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 mb-1.5">
-                Código de Proveedor *
-              </label>
-              <input
-                type="text"
-                required
-                placeholder="ej: PRV-001"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                className="w-full bg-slate-800/90 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-white focus:ring-2 focus:ring-sky-500/50 focus:outline-none"
-              />
-            </div>
+            {supplier ? (
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Código de Proveedor
+                </label>
+                <div className="w-full bg-slate-800/50 border border-slate-700 rounded-xl px-3.5 py-2 text-sm text-slate-300 font-mono flex items-center justify-between">
+                  <span>{code || supplier.code}</span>
+                  <span className="text-[10px] text-slate-500">Solo lectura</span>
+                </div>
+              </div>
+            ) : (
+              <div>
+                <label className="block text-xs font-semibold text-slate-300 mb-1.5">
+                  Código de Proveedor
+                </label>
+                <div className="w-full bg-slate-800/40 border border-slate-700/60 border-dashed rounded-xl px-3.5 py-2 text-xs text-sky-400 font-medium flex items-center justify-between">
+                  <span>Asignado automáticamente por el sistema</span>
+                  <span className="text-[10px] bg-sky-500/10 border border-sky-500/20 px-2 py-0.5 rounded-md font-mono">
+                    PROV-XXX
+                  </span>
+                </div>
+              </div>
+            )}
 
             <div>
               <label className="block text-xs font-semibold text-slate-300 mb-1.5">
@@ -341,15 +414,52 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
             </div>
           </div>
 
-          {/* Punctual Payment Benefit Configuration (suppliers.manage) */}
+          {/* Viajante / Vendedor Asignado */}
+          <div className="p-4 bg-slate-800/40 border border-slate-700/60 rounded-2xl space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center space-x-2">
+                <UserCheck className="w-4 h-4 text-emerald-400" />
+                <label className="text-xs font-bold text-white uppercase tracking-wider">
+                  Viajante / Vendedor Asignado
+                </label>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowQuickSellerModal(true)}
+                className="flex items-center space-x-1 text-xs text-emerald-400 hover:text-emerald-300 font-semibold transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>+ Nuevo Viajante</span>
+              </button>
+            </div>
+            <p className="text-[11px] text-slate-400">
+              Vendedor o representante comercial asociado a este proveedor.
+            </p>
+            <div className="pt-1">
+              <select
+                value={selectedSellerId}
+                onChange={(e) => setSelectedSellerId(e.target.value ? Number(e.target.value) : '')}
+                className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+              >
+                <option value="">-- Sin viajante asignado --</option>
+                {sellersList.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.display_name} {s.phone ? `(${s.phone})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* Descuento Pago Contado (strict_due_date_discount) */}
           <div className="p-4 bg-slate-800/40 border border-slate-700/60 rounded-2xl space-y-3">
             <div className="flex items-center justify-between">
               <div>
                 <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                  Beneficio Condicionado al Pago Puntual (Informativo)
+                  Descuento Pago Contado
                 </h4>
                 <p className="text-[11px] text-slate-400">
-                  Advierte visualmente mediante badges en Aging y Proyección para asegurar pagos antes del vencimiento.
+                  Advierte visualmente mediante badges en Cuentas Corrientes, Aging y Proyección para asegurar pagos antes del vencimiento.
                 </p>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
@@ -367,11 +477,11 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
             {strictDueDateDiscount && (
               <div className="space-y-1.5 pt-2 border-t border-slate-700/50">
                 <label className="block text-[11px] font-semibold text-slate-300">
-                  Condición Particular o Detalle del Beneficio (Opcional)
+                  Condición Particular o Detalle del Descuento (Opcional)
                 </label>
                 <input
                   type="text"
-                  placeholder="ej: Descuento 5% por pago antes del vencimiento acordado"
+                  placeholder="ej: Descuento 5% por pago antes del vencimiento acordado o contado"
                   value={discountPaymentNote}
                   onChange={(e) => setDiscountPaymentNote(e.target.value)}
                   disabled={!canManageSuppliers}
@@ -501,6 +611,16 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
           </div>
         </form>
         )}
+
+        {/* Modal de alta rápida de viajante on-the-fly */}
+        <SellerQuickCreateModal
+          isOpen={showQuickSellerModal}
+          onClose={() => setShowQuickSellerModal(false)}
+          onSellerCreated={(newSeller) => {
+            setSellersList((prev) => [...prev, newSeller].sort((a, b) => a.display_name.localeCompare(b.display_name)));
+            setSelectedSellerId(newSeller.id);
+          }}
+        />
       </div>
     </div>
   );
