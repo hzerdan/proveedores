@@ -3,7 +3,7 @@ import { supabase } from '../../lib/supabase';
 import { Supplier, DocumentSummaryView, DocumentNumberingSeries, NumberingMode, DocumentType } from '../../types/database';
 import { SeriesSelector } from './SeriesSelector';
 import { formatDate, formatMoney } from '../../lib/formatters';
-import { X, Receipt, Check, AlertCircle } from 'lucide-react';
+import { X, Receipt, Check, AlertCircle, Tag } from 'lucide-react';
 
 interface PaymentOrderModalProps {
   initialSupplierId?: number | null;
@@ -170,6 +170,26 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
 
     updated[index] = item;
     setTargetItems(updated);
+  };
+
+  const [expandedDiscounts, setExpandedDiscounts] = useState<Record<number, boolean>>({});
+
+  const toggleDiscount = (docId: number, index: number) => {
+    setExpandedDiscounts((prev) => {
+      const nextState = !prev[docId];
+      if (!nextState) {
+        handleDiscountValueChange(index, '');
+      }
+      return { ...prev, [docId]: nextState };
+    });
+  };
+
+  const handleApplyPercentPayment = (index: number, pct: number) => {
+    const item = targetItems[index];
+    const discAmt = getItemDiscountAmount(item);
+    const netDebt = Math.max(0, Math.round((item.doc.reference_balance - discAmt) * 100) / 100);
+    const calculatedPayment = Math.round(netDebt * (pct / 100) * 100) / 100;
+    handleAmountChange(index, calculatedPayment > 0 ? calculatedPayment.toFixed(2) : '');
   };
 
   const handleApplyFullDebt = (index: number) => {
@@ -513,74 +533,126 @@ export const PaymentOrderModal: React.FC<PaymentOrderModalProps> = ({
                             )}
                           </div>
 
-                          {/* Action Controls: Discount & Applied Amount (sin spinners) */}
-                          <div className="flex flex-wrap sm:flex-nowrap items-center gap-2.5 w-full lg:w-auto justify-end">
-                            {/* Discount Input Block */}
-                            <div className="flex items-center bg-slate-900/80 p-1 rounded-lg border border-slate-700/70 gap-1 shadow-inner">
-                              <div className="flex rounded overflow-hidden border border-slate-700 text-[10px]">
-                                <button
-                                  type="button"
-                                  onClick={() => handleDiscountTypeChange(idx, 'PERCENT')}
-                                  className={`px-2 py-0.5 font-bold transition-colors ${
-                                    item.discountType === 'PERCENT'
-                                      ? 'bg-amber-500 text-slate-950 font-black'
-                                      : 'bg-slate-800 text-slate-400 hover:text-white'
-                                  }`}
-                                  title="Descuento porcentual (%)"
-                                >
-                                  %
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDiscountTypeChange(idx, 'FIXED')}
-                                  className={`px-2 py-0.5 font-bold transition-colors ${
-                                    item.discountType === 'FIXED'
-                                      ? 'bg-amber-500 text-slate-950 font-black'
-                                      : 'bg-slate-800 text-slate-400 hover:text-white'
-                                  }`}
-                                  title="Descuento monto fijo ($)"
-                                >
-                                  $
-                                </button>
+                          {/* Action Controls: Descuento Comercial (NND) & Pago con OP */}
+                          <div className="flex flex-wrap sm:flex-nowrap items-center gap-3 w-full lg:w-auto justify-end">
+                            {/* Bloque Descuento Comercial / NND (Opcional y claramente rotulado) */}
+                            {expandedDiscounts[item.doc.document_id] || (item.discountValue && parseFloat(item.discountValue) > 0) ? (
+                              <div className="flex items-center bg-amber-950/40 p-1.5 rounded-xl border border-amber-500/40 gap-1.5 shadow-sm">
+                                <div className="flex flex-col">
+                                  <span className="text-[9px] font-bold text-amber-300 uppercase tracking-tight pl-0.5">
+                                    Descuento NND
+                                  </span>
+                                  <div className="flex items-center gap-1 mt-0.5">
+                                    <div className="flex rounded overflow-hidden border border-amber-600/60 text-[10px]">
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDiscountTypeChange(idx, 'PERCENT')}
+                                        className={`px-1.5 py-0.5 font-bold transition-colors ${
+                                          item.discountType === 'PERCENT'
+                                            ? 'bg-amber-500 text-slate-950 font-black'
+                                            : 'bg-slate-800 text-slate-400 hover:text-white'
+                                        }`}
+                                        title="Descuento porcentual (%)"
+                                      >
+                                        %
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDiscountTypeChange(idx, 'FIXED')}
+                                        className={`px-1.5 py-0.5 font-bold transition-colors ${
+                                          item.discountType === 'FIXED'
+                                            ? 'bg-amber-500 text-slate-950 font-black'
+                                            : 'bg-slate-800 text-slate-400 hover:text-white'
+                                        }`}
+                                        title="Descuento monto fijo ($)"
+                                      >
+                                        $
+                                      </button>
+                                    </div>
+
+                                    <div className="relative w-16">
+                                      <input
+                                        type="number"
+                                        step={item.discountType === 'PERCENT' ? '0.1' : '0.01'}
+                                        min="0"
+                                        max={item.discountType === 'PERCENT' ? '100' : undefined}
+                                        placeholder={item.discountType === 'PERCENT' ? '0%' : '0.00'}
+                                        value={item.discountValue}
+                                        onChange={(e) => handleDiscountValueChange(idx, e.target.value)}
+                                        className="w-full bg-slate-900 border border-amber-500/50 rounded px-1.5 py-0.5 font-sans font-bold text-right text-amber-300 text-xs tabular-nums focus:ring-1 focus:ring-amber-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                        title={item.discountType === 'PERCENT' ? 'Porcentaje de descuento comercial' : 'Monto de descuento comercial'}
+                                      />
+                                    </div>
+
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleDiscount(item.doc.document_id, idx)}
+                                      className="p-1 text-slate-400 hover:text-rose-400 rounded transition-colors"
+                                      title="Quitar descuento comercial"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => toggleDiscount(item.doc.document_id, idx)}
+                                className="px-2 py-1.5 rounded-lg bg-amber-500/10 hover:bg-amber-500/20 text-amber-400 border border-amber-500/30 text-[10px] font-semibold transition-all flex items-center gap-1 shadow-sm"
+                                title="Agregar quita o descuento comercial mediante Nota de Débito interna (NND)"
+                              >
+                                <Tag className="w-3 h-3" />
+                                <span>+ Descuento NND</span>
+                              </button>
+                            )}
+
+                            {/* Bloque Pago con Orden de Pago */}
+                            <div className="flex flex-col items-end">
+                              <div className="flex items-center justify-between w-full mb-0.5">
+                                <span className="text-[9px] font-bold text-emerald-400 uppercase tracking-tight">
+                                  Pago OP ($)
+                                </span>
+                                <div className="flex items-center gap-1 ml-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApplyPercentPayment(idx, 10)}
+                                    className="text-[9px] px-1 py-0.2 bg-slate-800 hover:bg-emerald-950 text-slate-300 hover:text-emerald-300 rounded border border-slate-700 transition-colors"
+                                    title="Pagar el 10% de esta factura con la OP"
+                                  >
+                                    10%
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApplyPercentPayment(idx, 50)}
+                                    className="text-[9px] px-1 py-0.2 bg-slate-800 hover:bg-emerald-950 text-slate-300 hover:text-emerald-300 rounded border border-slate-700 transition-colors"
+                                    title="Pagar el 50% de esta factura con la OP"
+                                  >
+                                    50%
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={() => handleApplyFullDebt(idx)}
+                                    className="text-[9px] px-1.5 py-0.2 bg-emerald-600/30 hover:bg-emerald-600/50 text-emerald-300 font-bold rounded border border-emerald-500/40 transition-colors"
+                                    title="Saldar el 100% neto pendiente con la OP"
+                                  >
+                                    Saldar
+                                  </button>
+                                </div>
                               </div>
 
-                              <div className="relative w-20">
+                              <div className="relative w-32 shrink-0">
+                                <span className="absolute left-2.5 top-1 text-emerald-400 font-sans text-xs">$</span>
                                 <input
                                   type="number"
-                                  step={item.discountType === 'PERCENT' ? '0.1' : '0.01'}
-                                  min="0"
-                                  max={item.discountType === 'PERCENT' ? '100' : undefined}
-                                  placeholder={item.discountType === 'PERCENT' ? '0%' : '0.00'}
-                                  value={item.discountValue}
-                                  onChange={(e) => handleDiscountValueChange(idx, e.target.value)}
-                                  className="w-full bg-slate-800 border border-slate-700 rounded px-2 py-0.5 font-sans font-bold text-right text-amber-300 text-xs tabular-nums focus:ring-1 focus:ring-amber-500 focus:border-amber-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                  title={item.discountType === 'PERCENT' ? 'Porcentaje de descuento' : 'Monto de descuento'}
+                                  step="0.01"
+                                  placeholder="0.00"
+                                  value={item.appliedAmount}
+                                  onChange={(e) => handleAmountChange(idx, e.target.value)}
+                                  className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-5 pr-2 py-1 font-sans font-bold text-right text-white text-xs tabular-nums focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                  title="Importe a cancelar desde la Orden de Pago"
                                 />
                               </div>
-                            </div>
-
-                            {/* Saldar button */}
-                            <button
-                              type="button"
-                              onClick={() => handleApplyFullDebt(idx)}
-                              className="px-2.5 py-1 rounded-lg bg-slate-700 hover:bg-slate-600 text-slate-200 text-[10px] font-semibold transition-colors shrink-0 shadow-sm"
-                              title="Imputar el saldo neto pendiente con la OP"
-                            >
-                              Saldar
-                            </button>
-
-                            {/* OP Applied Amount Input (sin spinners) */}
-                            <div className="relative w-32 shrink-0">
-                              <span className="absolute left-2.5 top-1 text-slate-400 font-sans text-xs">$</span>
-                              <input
-                                type="number"
-                                step="0.01"
-                                placeholder="0.00"
-                                value={item.appliedAmount}
-                                onChange={(e) => handleAmountChange(idx, e.target.value)}
-                                className="w-full bg-slate-800 border border-slate-700 rounded-lg pl-5 pr-2 py-1 font-sans font-bold text-right text-white text-xs tabular-nums focus:ring-1 focus:ring-emerald-500 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-                                title="Importe a cancelar desde la Orden de Pago"
-                              />
                             </div>
                           </div>
                         </div>
