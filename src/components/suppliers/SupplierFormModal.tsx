@@ -429,7 +429,7 @@ export const SupplierFormModal: React.FC<SupplierFormModalProps> = ({
                 className="flex items-center space-x-1 text-xs text-emerald-400 hover:text-emerald-300 font-semibold transition-colors"
               >
                 <Plus className="w-3.5 h-3.5" />
-                <span>+ Nuevo Viajante</span>
+                <span>Nuevo Viajante</span>
               </button>
             </div>
             <p className="text-[11px] text-slate-400">

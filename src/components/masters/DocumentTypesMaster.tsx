@@ -212,7 +212,7 @@ export const DocumentTypesMaster: React.FC = () => {
             className="flex items-center space-x-2 bg-gradient-to-r from-sky-600 to-indigo-600 hover:from-sky-500 hover:to-indigo-500 text-white px-4 py-2.5 rounded-2xl text-xs font-bold shadow-lg shadow-sky-900/30 transition-all shrink-0"
           >
             <Plus className="w-4 h-4" />
-            <span>+ Nuevo Tipo de Comprobante</span>
+            <span>Nuevo Tipo de Comprobante</span>
           </button>
         )}
       </div>

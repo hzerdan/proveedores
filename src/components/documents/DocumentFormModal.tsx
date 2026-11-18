@@ -582,7 +582,7 @@ export const DocumentFormModal: React.FC<DocumentFormModalProps> = ({
                   className="text-[11px] text-sky-400 hover:text-sky-300 font-semibold flex items-center space-x-1"
                 >
                   <Plus className="w-3 h-3" />
-                  <span>+ Nuevo Proveedor</span>
+                  <span>Nuevo Proveedor</span>
                 </button>
               </div>
               <select
