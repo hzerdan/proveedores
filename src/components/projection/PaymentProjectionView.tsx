@@ -5,6 +5,7 @@ import { formatDate, formatMoney } from '../../lib/formatters';
 import { BucketDetailModal } from '../aging/BucketDetailModal';
 import { PunctualPaymentBadge } from '../common/PunctualPaymentBadge';
 import { PunctualPaymentFilter } from '../common/PunctualPaymentFilter';
+import { DateInput } from '../common/DateInput';
 import { calculatePunctualStatusFromSummary } from '../../lib/punctualPayment';
 import {
   Calendar,
@@ -306,31 +307,27 @@ export const PaymentProjectionView: React.FC<PaymentProjectionViewProps> = ({
 
             {/* Cutoff Date */}
             <div className="flex items-center space-x-2 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700/60 text-xs">
-              <Calendar className="w-4 h-4 text-sky-400 shrink-0" />
               <label className="font-semibold text-slate-300 whitespace-nowrap">Fecha Corte:</label>
-              <input
-                type="date"
+              <DateInput
                 value={cutoffDate}
-                onChange={(e) => setCutoffDate(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5 text-xs text-white font-mono"
+                onChange={(val) => setCutoffDate(val)}
+                className="w-32"
               />
             </div>
 
             {/* Date Range Filters (Optional) */}
             <div className="flex items-center space-x-2 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700/60 text-xs">
               <span className="text-slate-400 font-semibold uppercase text-[10px]">Vto Desde:</span>
-              <input
-                type="date"
+              <DateInput
                 value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5 text-xs text-white font-mono"
+                onChange={(val) => setDateFrom(val)}
+                className="w-32"
               />
               <span className="text-slate-400 font-semibold uppercase text-[10px]">Hasta:</span>
-              <input
-                type="date"
+              <DateInput
                 value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded-lg px-2 py-0.5 text-xs text-white font-mono"
+                onChange={(val) => setDateTo(val)}
+                className="w-32"
               />
               {(dateFrom || dateTo) && (
                 <button

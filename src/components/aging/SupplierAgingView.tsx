@@ -5,6 +5,7 @@ import { formatDate, formatMoney } from '../../lib/formatters';
 import { BucketDetailModal } from './BucketDetailModal';
 import { PunctualPaymentBadge } from '../common/PunctualPaymentBadge';
 import { PunctualPaymentFilter } from '../common/PunctualPaymentFilter';
+import { DateInput } from '../common/DateInput';
 import { PunctualPaymentStatus, calculatePunctualPaymentStatus } from '../../lib/punctualPayment';
 import {
   Calendar,
@@ -294,16 +295,14 @@ export const SupplierAgingView: React.FC<SupplierAgingViewProps> = ({
             </div>
 
             {/* Date Cutoff Control */}
-            <div className="flex items-center space-x-3 bg-slate-800/80 p-2 rounded-xl border border-slate-700/60">
-              <Calendar className="w-4 h-4 text-sky-400 shrink-0" />
+            <div className="flex items-center space-x-2.5 bg-slate-800/80 p-2 rounded-xl border border-slate-700/60">
               <label className="text-xs font-semibold text-slate-300 whitespace-nowrap">
                 Fecha de Corte:
               </label>
-              <input
-                type="date"
+              <DateInput
                 value={cutoffDate}
-                onChange={(e) => setCutoffDate(e.target.value)}
-                className="bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white font-mono focus:ring-1 focus:ring-sky-500"
+                onChange={(val) => setCutoffDate(val)}
+                className="w-32"
               />
             </div>
           </div>
